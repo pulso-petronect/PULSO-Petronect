@@ -1,0 +1,393 @@
+Crie uma aplicação web responsiva e funcional chamada **PULSO Petronect**, com o slogan **“Do clique à ação”**.
+
+A aplicação será apresentada no Hackathon Conexão Ancestral, promovido pela Petronect e executado pela KODIE Academy.
+
+## CONTEXTO DO PROBLEMA
+
+A Petronect possui dados de acesso ao seu portal, mas atualmente consegue visualizar principalmente a quantidade de cliques. Ela precisa entender:
+
+* Quem acessa o portal;
+* Qual foi o primeiro clique;
+* Quais páginas são mais visitadas;
+* Com que frequência cada usuário retorna;
+* Quais usuários demonstram interesse;
+* Onde existem dificuldades ou abandono;
+* Como transformar esses comportamentos em comunicação e decisões melhores.
+
+## PROPOSTA DA SOLUÇÃO
+
+O PULSO Petronect é uma plataforma de inteligência comportamental que transforma registros de navegação em:
+
+1. Indicadores;
+2. Segmentos comportamentais;
+3. Alertas explicáveis;
+4. Recomendações de ação;
+5. Sugestões de comunicação personalizada.
+
+A frase principal do produto é:
+
+**“Hoje, a Petronect enxerga cliques. Com o PULSO, ela entende comportamentos e sabe qual decisão tomar.”**
+
+## STACK
+
+Utilize:
+
+* React;
+* TypeScript;
+* Vite;
+* Tailwind CSS;
+* shadcn/ui;
+* Lucide Icons;
+* Recharts;
+* React Router;
+* Dados simulados locais em JSON;
+* Biblioteca para leitura de CSV, permitindo importar uma base;
+* LocalStorage para preservar filtros e dados importados.
+
+Não dependa de banco externo ou de chave de API para a demonstração funcionar.
+
+Estruture o código para permitir integração futura com Supabase, API da Petronect e serviços de IA.
+
+## IDENTIDADE VISUAL
+
+Crie uma interface corporativa, tecnológica, elegante e acessível.
+
+Cores:
+
+* Azul-escuro: #123F73;
+* Azul: #1E5799;
+* Verde: #62BD4D;
+* Coral para alertas: #FF6654;
+* Fundo claro: #F5F7FA;
+* Branco: #FFFFFF;
+* Texto escuro: #172033.
+
+A logo provisória deve combinar uma linha de pulso com pontos de dados conectados.
+
+Não copie nem altere a logo oficial da Petronect. Exiba “PULSO” como marca principal e “Solução demonstrativa para o ecossistema Petronect” como identificação secundária.
+
+A interface deve funcionar perfeitamente em desktop e celular, mas priorize a experiência em desktop.
+
+## NAVEGAÇÃO
+
+Crie um menu lateral recolhível contendo:
+
+* Visão Geral;
+* Jornada dos Usuários;
+* Segmentos;
+* Central de Oportunidades;
+* Comunicação Inteligente;
+* Importar Dados;
+* Metodologia;
+* Sobre o Projeto.
+
+No topo, inclua:
+
+* Período analisado;
+* Filtro por tipo de usuário;
+* Filtro por página;
+* Botão “Atualizar análise”;
+* Perfil “Analista Petronect”.
+
+## TELA 1 — LOGIN DEMONSTRATIVO
+
+Criar uma tela de login visual, sem autenticação externa.
+
+Dados para demonstração:
+
+* E-mail: [analista@petronect.com.br](mailto:analista@petronect.com.br)
+* Senha: qualquer valor
+
+Adicionar o botão “Entrar na demonstração”.
+
+Incluir a frase:
+
+**“Transforme acessos em decisões acionáveis.”**
+
+## TELA 2 — VISÃO GERAL
+
+Criar um dashboard executivo com os cards:
+
+* Total de acessos;
+* Usuários únicos;
+* Taxa de retorno;
+* Tempo médio de navegação;
+* Usuários com possível dificuldade;
+* Oportunidades identificadas.
+
+Adicionar:
+
+* Gráfico de acessos ao longo dos dias;
+* Ranking das páginas mais acessadas;
+* Gráfico de acessos por horário;
+* Distribuição dos segmentos comportamentais;
+* Funil de navegação;
+* Lista “Principais descobertas”.
+
+Cada card deve mostrar comparação com o período anterior.
+
+## TELA 3 — JORNADA DOS USUÁRIOS
+
+Exibir a jornada:
+
+**Entrada → Página inicial → Oportunidade → Documentação → Próxima ação ou abandono**
+
+Incluir:
+
+* Primeiro clique mais frequente;
+* Caminhos mais utilizados;
+* Etapa com maior abandono;
+* Taxa de progressão;
+* Tabela de sessões;
+* Filtros por usuário, período e página.
+
+Ao selecionar uma sessão, abrir um painel lateral com a linha do tempo dos acessos.
+
+## TELA 4 — SEGMENTOS COMPORTAMENTAIS
+
+Classificar os usuários com regras transparentes:
+
+* **Novo:** realizou o primeiro acesso recentemente;
+* **Explorador:** visitou várias áreas sem padrão definido;
+* **Interessado:** voltou várias vezes ao mesmo conteúdo;
+* **Recorrente:** apresenta frequência alta e constante;
+* **Com dificuldade:** repete páginas ou etapas sem avançar;
+* **Em risco de abandono:** reduziu ou interrompeu os acessos;
+* **Reengajado:** voltou depois de um período de inatividade.
+
+Para cada segmento, mostrar:
+
+* Quantidade de usuários;
+* Percentual da base;
+* Tendência;
+* Comportamento identificado;
+* Prioridade;
+* Ação sugerida;
+* Botão “Ver usuários”;
+* Botão “Criar comunicação”.
+
+Nunca afirmar que uma classificação é uma certeza. Usar expressões como “indício”, “possível comportamento” e “padrão identificado”.
+
+## TELA 5 — CENTRAL DE OPORTUNIDADES
+
+Esta deve ser a tela principal e o maior diferencial da solução.
+
+Criar cards de oportunidades contendo:
+
+* Título;
+* Descrição do padrão;
+* Número de usuários afetados;
+* Evidência encontrada;
+* Impacto potencial;
+* Nível de prioridade;
+* Confiança da análise;
+* Recomendação;
+* Botões “Ver evidências” e “Criar comunicação”.
+
+Criar exemplos como:
+
+### Possível barreira documental
+
+“38 fornecedores acessaram a área de documentação pelo menos quatro vezes, mas não avançaram para a próxima etapa.”
+
+Recomendação:
+
+“Revisar a clareza das orientações e enviar uma comunicação com a lista de documentos e os próximos passos.”
+
+### Interesse sem conversão
+
+“24 usuários retornaram pelo menos três vezes à mesma oportunidade nos últimos sete dias, mas não concluíram uma ação.”
+
+Recomendação:
+
+“Enviar uma comunicação segmentada destacando prazo, requisitos e próximo passo.”
+
+### Risco de abandono
+
+“17 usuários recorrentes não acessam o portal há mais de 15 dias.”
+
+Recomendação:
+
+“Criar uma campanha de reengajamento com oportunidades relevantes.”
+
+Incluir filtros por prioridade, segmento e tipo de padrão.
+
+## TELA 6 — COMUNICAÇÃO INTELIGENTE
+
+Permitir selecionar:
+
+* Segmento;
+* Objetivo;
+* Canal;
+* Tom da mensagem;
+* Oportunidade identificada.
+
+Gerar um rascunho de mensagem usando templates locais, sem depender de API.
+
+Exibir:
+
+* Público selecionado;
+* Evidência que motivou a comunicação;
+* Assunto;
+* Texto sugerido;
+* Botão “Gerar outra versão”;
+* Botão “Copiar”;
+* Botão “Aprovar simulação”.
+
+Adicionar o aviso:
+
+**“A recomendação deve ser revisada por uma pessoa antes de qualquer envio. O PULSO apoia a decisão, mas não substitui a análise humana.”**
+
+Não implementar disparo real de mensagens.
+
+## TELA 7 — IMPORTAÇÃO DE DADOS
+
+Criar uma área de upload de CSV por arrastar e soltar.
+
+O sistema deve:
+
+* Aceitar CSV;
+* Mostrar uma prévia;
+* Identificar colunas;
+* Permitir mapear campos;
+* Validar dados;
+* Exibir erros;
+* Atualizar o dashboard com os dados importados.
+
+Campos esperados:
+
+* user_id;
+* session_id;
+* timestamp;
+* page;
+* event_type;
+* user_type;
+* duration_seconds;
+* previous_page;
+* next_page;
+* completed_action.
+
+Se não houver arquivo importado, usar uma base simulada consistente com pelo menos 300 eventos, 60 usuários e 30 dias.
+
+Criar botão para baixar um CSV de exemplo.
+
+## TELA 8 — METODOLOGIA
+
+Explique de maneira visual:
+
+1. Coleta dos registros;
+2. Tratamento e anonimização;
+3. Cálculo dos indicadores;
+4. Identificação de padrões;
+5. Segmentação comportamental;
+6. Geração de recomendações;
+7. Revisão humana.
+
+Apresente as regras utilizadas em cada classificação.
+
+Incluir princípios:
+
+* Transparência;
+* Explicabilidade;
+* Minimização de dados;
+* Privacidade;
+* LGPD;
+* Supervisão humana;
+* Não discriminação.
+
+Não utilizar dados pessoais reais. Todos os usuários devem aparecer anonimizados, como “USR-001”.
+
+## TELA 9 — SOBRE O PROJETO
+
+Adicionar:
+
+**PULSO Petronect — Do clique à ação**
+
+Projeto desenvolvido pela **Equipe 10** no Hackathon Projeto Conexão Ancestral — Edição 2026.
+
+Integrantes:
+
+* Regine Barbosa Gama;
+* Mariah Aparecida Navarro Rodrigues da Silva;
+* Jasmine de Sá Araujo;
+* Juliana Freire de Oliveira;
+* Stefany Rodrigues da Silva.
+
+Informar:
+
+* Realização: Petronect;
+* Execução: KODIE Academy;
+* Natureza: protótipo demonstrativo.
+
+## REGRAS DE ANÁLISE
+
+Implemente funções locais para:
+
+* Calcular total de eventos;
+* Contar usuários únicos;
+* Calcular frequência de retorno;
+* Descobrir primeiro clique;
+* Identificar páginas mais visitadas;
+* Calcular abandono;
+* Identificar repetição de páginas;
+* Detectar redução de atividade;
+* Criar segmentos;
+* Gerar oportunidades;
+* Calcular uma pontuação de prioridade;
+* Mostrar as evidências utilizadas.
+
+A prioridade pode considerar:
+
+* Quantidade de usuários afetados;
+* Frequência do comportamento;
+* Recência;
+* Ausência de progressão;
+* Impacto potencial.
+
+Não criar números aleatórios diretamente nos componentes. Centralize a base simulada e calcule todos os indicadores a partir dela, garantindo consistência entre gráficos, cards e tabelas.
+
+## EXPERIÊNCIA E QUALIDADE
+
+* Interface sem erros;
+* Navegação funcional;
+* Estados de carregamento;
+* Estados vazios;
+* Tratamento de erros;
+* Tooltips explicando indicadores;
+* Contraste acessível;
+* Layout profissional;
+* Gráficos responsivos;
+* Dados coerentes;
+* Nenhum botão importante sem funcionar;
+* README completo;
+* Código organizado por componentes, páginas, serviços, tipos e utilitários.
+
+## MODO DEMONSTRAÇÃO
+
+Criar um botão “Iniciar demonstração guiada”.
+
+Ele deve conduzir o apresentador por quatro etapas:
+
+1. Mostrar o cenário geral;
+2. Abrir uma oportunidade;
+3. Exibir as evidências;
+4. Gerar uma comunicação para o segmento.
+
+A demonstração deve funcionar completamente sem internet, banco externo ou API de IA.
+
+## ENTREGA
+
+Implemente o projeto completo e executável, não apenas um layout estático.
+
+Ao finalizar:
+
+1. Instale as dependências;
+2. Execute o projeto;
+3. Corrija erros de TypeScript;
+4. Verifique todas as rotas;
+5. Garanta que os gráficos carreguem;
+6. Teste a importação do CSV;
+7. Crie o README com instruções;
+8. Deixe o projeto pronto para publicar.
+
+Não remova funcionalidades existentes durante correções futuras. Antes de concluir, revise a aplicação como se fosse uma banca avaliando aderência ao desafio, viabilidade técnica e qualidade da apresentação.
