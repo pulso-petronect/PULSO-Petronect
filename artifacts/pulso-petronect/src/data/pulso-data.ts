@@ -13,9 +13,6 @@ export type AccessEvent = {
   completed_action: boolean;
 };
 
-type StoredEventRecord = AccessEvent;
-
-const ALL_PAGES = ['/', '/oportunidades', '/documentacao', '/fornecedores', '/suporte', '/noticias', '/comunicacao', '/segmentos', '/jornada', '/importar', '/metodologia', '/sobre'];
 const PAGE_LABELS: Record<string, string> = {
   '/': 'Página inicial',
   '/oportunidades': 'Oportunidades',
@@ -30,8 +27,6 @@ const PAGE_LABELS: Record<string, string> = {
   '/metodologia': 'Metodologia',
   '/sobre': 'Sobre o projeto',
 };
-
-const EVENT_TYPES = ['entrada', 'visualização', 'download', 'busca', 'saída'];
 
 function seededRandom(seed: number) {
   let s = seed;
@@ -196,6 +191,42 @@ export type Filters = {
   oppStatus: string;
 };
 
+export const DEFAULT_FILTERS: Filters = {
+  period: '30 dias',
+  userType: 'Todos',
+  page: 'Todas',
+  segment: 'Todos',
+  priority: 'Todas',
+  oppStatus: 'Todas',
+};
+
+export type BaseSource = {
+  mode: 'simulada' | 'importada';
+  file: string | null;
+  processedAt: string;
+};
+
+export type BaseInfo = {
+  eventos: number;
+  usuarios: number;
+  inicio: string;
+  fim: string;
+};
+
+export function computeBaseInfo(events: AccessEvent[]): BaseInfo {
+  const usuarios = new Set(events.map(e => e.user_id)).size;
+  const timestamps = events.map(e => e.timestamp.slice(0, 10)).sort();
+  const inicio = timestamps.length > 0 ? timestamps[0] : '—';
+  const fim = timestamps.length > 0 ? timestamps[timestamps.length - 1] : '—';
+  return { eventos: events.length, usuarios, inicio, fim };
+}
+
+export function formatProcessedAt(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value || '—';
+  return parsed.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 export type ComputedMetrics = {
   totalAccesses: number;
   uniqueUsers: number;
@@ -215,7 +246,7 @@ export type AccessTrendDay = { day: string; acessos: number; unicos: number };
 export type HourlyAccess = { hora: string; acessos: number };
 export type PageRanking = { pagina: string; acessos: number; share: number };
 export type ComputedSegment = { key: SegmentKey; count: number; percentage: number; trend: number; behavior: string; priority: 'Alta' | 'Média' | 'Baixa'; color: string; rule: string; confidence: number; possibleAction: string };
-export type ComputedOpportunity = { id: string; title: string; segment: SegmentKey; severity: string; confidence: number; impact: string; summary: string; evidence: string[]; recommendation: string; status: string; affectedUsers: number; rule: string };
+export type ComputedOpportunity = { id: string; title: string; segment: SegmentKey; severity: string; confidence: number; impact: string; summary: string; evidence: string[]; hypothesis: string; recommendation: string; metric: string; status: string; affectedUsers: number; rule: string };
 
 function filterEvents(events: AccessEvent[], filters: Filters, now?: Date): AccessEvent[] {
   const referenceDate = now || new Date('2026-05-31T23:59:59');
@@ -422,22 +453,27 @@ function computeOpportunities(events: AccessEvent[], segments: ComputedSegment[]
   const opps: ComputedOpportunity[] = [];
   const userSessions = new Map<string, AccessEvent[]>();
   events.forEach(e => { if (!userSessions.has(e.user_id)) userSessions.set(e.user_id, []); userSessions.get(e.user_id)!.push(e); });
+  let docRepeatedNoAction = 0;
   let docSearches = 0;
   let docAbandons = 0;
   let opportunityViews = 0;
   let opportunityNoDoc = 0;
   let supportContacts = 0;
   let repeatSearches = 0;
+  let usersWithRepeatSearch = 0;
   let inactiveUsers = 0;
   userSessions.forEach((sessions) => {
     const sorted = sessions.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
     const searches = sorted.filter(e => e.event_type === 'busca').length;
+    const docAccesses = sorted.filter(e => e.page === '/documentacao').length;
     const hasDoc = sorted.some(e => e.page === '/documentacao');
     const hasOpp = sorted.some(e => e.page === '/oportunidades');
     const hasSupport = sorted.some(e => e.page === '/suporte');
+    const completedAny = sorted.some(e => e.completed_action);
     const lastDate = sorted[sorted.length - 1]?.timestamp.slice(0, 10) || '2026-05-01';
     const daysSince = (new Date('2026-05-31').getTime() - new Date(lastDate).getTime()) / (1000 * 60 * 60 * 24);
-    if (searches >= 2) repeatSearches += searches;
+    if (docAccesses >= 4 && !completedAny) docRepeatedNoAction++;
+    if (searches >= 2) { repeatSearches += searches; usersWithRepeatSearch++; }
     if (!hasDoc && searches > 0) docSearches++;
     if (sorted.some(e => e.event_type === 'saída' && !e.completed_action)) docAbandons++;
     if (hasOpp) opportunityViews++;
@@ -448,71 +484,95 @@ function computeOpportunities(events: AccessEvent[], segments: ComputedSegment[]
   const difficultySeg = segments.find(s => s.key === 'Com dificuldade');
   const abandonSeg = segments.find(s => s.key === 'Em risco de abandono');
   const interestedSeg = segments.find(s => s.key === 'Interessado');
-  const explorerSeg = segments.find(s => s.key === 'Explorador');
   const reengagedSeg = segments.find(s => s.key === 'Reengajado');
+  if (docRepeatedNoAction > 0) {
+    opps.push({
+      id: 'opp-01', title: 'Possível barreira documental',
+      segment: 'Com dificuldade', severity: 'Alta', confidence: 86,
+      impact: 'Conclusão de ações',
+      summary: `Um grupo de ${docRepeatedNoAction} usuários acessou a área de documentação repetidamente e não concluiu a próxima etapa da jornada. Com base em ${difficultySeg?.count || docRepeatedNoAction} usuários classificados no segmento.`,
+      evidence: [`Quatro ou mais acessos à área de documentação no período`, `Nenhuma ação concluída após esses acessos`],
+      hypothesis: 'Possível barreira para localizar ou compreender os requisitos. Trata-se de uma hipótese, não de uma certeza.',
+      recommendation: 'Enviar orientação segmentada com caminho direto para os materiais mais acessados da documentação.',
+      metric: 'Taxa de conclusão de ações do segmento, comparando antes e depois da comunicação.',
+      status: 'Nova', affectedUsers: docRepeatedNoAction, rule: 'Acesso repetido à documentação (4+) sem conclusão de ação',
+    });
+  }
   if (repeatSearches > 0) {
     opps.push({
-      id: 'opp-01', title: 'Busca sem retorno na documentação',
+      id: 'opp-02', title: 'Busca sem retorno na documentação',
       segment: 'Com dificuldade', severity: 'Alta', confidence: 87,
       impact: 'Conversão',
       summary: `${repeatSearches} instâncias de busca repetida detectadas. Usuários não encontram caminho direto para a documentação desejada.`,
       evidence: [`${repeatSearches} sessões com buscas repetidas`, `${Math.round((docAbandons / Math.max(1, userSessions.size)) * 100)}% abandonam antes de abrir um documento`, 'Pico concentrado entre 10h e 14h'],
+      hypothesis: 'Hipótese: os termos utilizados ou a estrutura de apresentação dificultam a localização do documento.',
       recommendation: 'Criar atalho de busca na entrada da documentação e revisar os termos de busca mais frequentes.',
-      status: 'Nova', affectedUsers: repeatSearches, rule: 'Repetição de busca com abandono subsequente',
+      metric: 'Taxa de busca sem download e o tempo para abrir um documento após a busca.',
+      status: 'Nova', affectedUsers: usersWithRepeatSearch, rule: 'Repetição de busca com abandono subsequente',
     });
   }
   if (opportunityViews > 0) {
     opps.push({
-      id: 'opp-02', title: 'Retorno de interessados após 48 horas',
+      id: 'opp-03', title: 'Retorno de interessados após 48 horas',
       segment: 'Interessado', severity: 'Média', confidence: 81,
       impact: 'Engajamento',
       summary: `${interestedSeg?.count || 0} usuários classificados como interessados. Parte retorna em segunda sessão para avançar na decisão.`,
       evidence: [`${Math.round((opportunityViews / Math.max(1, userSessions.size)) * 100)}% visitaram oportunidades`, 'Documentação é a segunda página mais acessada', 'Maior concentração em horário comercial'],
+      hypothesis: 'Hipótese: o interesse existe, mas falta um resumo contextual para avançar a decisão.',
       recommendation: 'Enviar comunicação contextual com resumo da oportunidade e documentação relacionada.',
+      metric: 'Taxa de retorno em 48h e abertura de documentação após a comunicação.',
       status: 'Em análise', affectedUsers: opportunityViews, rule: 'Interesse com retorno em 48h',
     });
   }
   if (docAbandons > 2) {
     opps.push({
-      id: 'opp-03', title: 'Risco de abandono após tentativa sem conclusão',
+      id: 'opp-04', title: 'Risco de abandono após tentativa sem conclusão',
       segment: 'Em risco de abandono', severity: 'Alta', confidence: 76,
       impact: 'Retenção',
       summary: `${abandonSeg?.count || 0} usuários em risco. A taxa de abandono sugere barreiras na jornada de conclusão.`,
       evidence: [`${docAbandons} sessões com saída sem conclusão`, `Taxa de retorno cai em usuários que abandonaram`, 'Suporte recebe contato em minoria dos casos'],
+      hypothesis: 'Hipótese: algum obstáculo na jornada de conclusão está levando ao abandono.',
       recommendation: 'Exibir orientação imediata em pontos de abandono e sugerir caminhos alternativos.',
+      metric: 'Taxa de retorno e conclusão dos usuários em risco após a orientação imediata.',
       status: 'Nova', affectedUsers: docAbandons, rule: 'Abandono sem conclusão de ação',
     });
   }
   if (opportunityNoDoc > 0) {
     opps.push({
-      id: 'opp-04', title: 'Repetição de navegação sem progressão documental',
+      id: 'opp-05', title: 'Repetição de navegação sem progressão documental',
       segment: 'Explorador', severity: 'Média', confidence: 72,
       impact: 'Eficiência',
       summary: `${opportunityNoDoc} usuários visitam oportunidades mas não avançam para documentação. Padrão de navegação circular detectado.`,
       evidence: [`${opportunityNoDoc} sessões com navegação oportunidade→início`, 'Padrão se repete em 3+ sessões', 'Maioria não acessa suporte'],
+      hypothesis: 'Hipótese: falta um caminho direto entre oportunidades e documentação.',
       recommendation: 'Inserir link direto para documentação relevante dentro da página de oportunidades.',
+      metric: 'Tempo entre visitar uma oportunidade e abrir a documentação correspondente.',
       status: 'Em análise', affectedUsers: opportunityNoDoc, rule: 'Navegação circular sem progressão',
     });
   }
   if ((reengagedSeg?.count || 0) > 0 || inactiveUsers > 0) {
     opps.push({
-      id: 'opp-05', title: 'Oportunidade de reengajamento com base na inatividade',
+      id: 'opp-06', title: 'Oportunidade de reengajamento com base na inatividade',
       segment: 'Reengajado', severity: 'Média', confidence: 68,
       impact: 'Retenção',
       summary: `${inactiveUsers} usuários com inatividade prolongada. Hipótese de que comunicação direcionada pode retomar a jornada.`,
       evidence: [`${inactiveUsers} usuários sem atividade nos últimos 10 dias`, 'Reengajados mostram taxa de retorno de 75%', 'Momento ideal para intervenção contextual'],
+      hypothesis: 'Hipótese: uma comunicação direcionada pode retomar a jornada de usuários inativos.',
       recommendation: 'Criar campanha de reengajamento segmentada com resumo de oportunidades disponíveis.',
+      metric: 'Taxa de retorno de usuários inativos após a campanha.',
       status: 'Nova', affectedUsers: inactiveUsers, rule: 'Inatividade prolongada com histórico de interação',
     });
   }
   if (opps.length === 0) {
     opps.push({
-      id: 'opp-06', title: 'Análise comportamental em andamento',
+      id: 'opp-07', title: 'Análise comportamental em andamento',
       segment: 'Explorador', severity: 'Baixa', confidence: 50,
       impact: 'Exploração',
       summary: 'Ainda não foram identificados sinais suficientes para oportunidades prioritárias. Continue monitorando.',
       evidence: ['Base de eventos em análise', 'Regras de segmentação ativas'],
+      hypothesis: 'Sem hipótese ativa — ainda não há sinais suficientes para uma ação direcionada.',
       recommendation: 'Aguardar mais dados para gerar oportunidades mais precisas.',
+      metric: 'Monitoramento da base em busca dos primeiros padrões consistentes.',
       status: 'Em análise', affectedUsers: 0, rule: 'Insuficiência de dados',
     });
   }
@@ -603,28 +663,92 @@ const COMMUNICATION_TEMPLATES: Record<string, Record<string, Record<string, { su
   },
   'Recorrente': {
     'Reduzir abandono': { 'Orientativo': { subject: 'Mantenha o ritmo — novidades para você', body: 'Olá! Como você é um usuário recorrente, separamos novidades relevantes para seu perfil.' }, 'Direto': { subject: 'Novidades para seu perfil recorrente', body: 'Atualizações relevantes disponíveis. Acesse a página de oportunidades.' }, 'Institucional': { subject: 'PULSO — Novidades para usuários recorrentes', body: 'Prezado(a),\n\nNovidades relevantes ao seu perfil foram identificadas.' } }, 'Aumentar retorno': { 'Orientativo': { subject: 'Bem-vindo de volta!', body: 'Olá! Novidades esperam por você no ecossistema Petronect.' }, 'Direto': { subject: 'Novidades disponíveis', body: 'Acesse o ecossistema para verificar novidades.' }, 'Institucional': { subject: 'PULSO — Novidades para seu retorno', body: 'Prezado(a),\n\nNovidades relevantes estão disponíveis para sua consulta.' } }, 'Orientar acesso': { 'Orientativo': { subject: 'Acesso rápido às suas áreas de interesse', body: 'Olá! Preparamos atalhos para suas áreas de maior interesse.' }, 'Direto': { subject: 'Atalhos para áreas de interesse', body: 'Atalhos disponíveis na página inicial para suas áreas frequentes.' }, 'Institucional': { subject: 'PULSO — Atalhos personalizados', body: 'Prezado(a),\n\nAtalhos para suas áreas de maior utilização disponíveis na página inicial.' } }, 'Explicar documentação': { 'Orientativo': { subject: 'Documentação atualizada para você', body: 'Olá! A documentação foi atualizada com novos materiais relevantes para seu perfil.' }, 'Direto': { subject: 'Documentação atualizada', body: 'Novos materiais disponíveis na seção de documentação.' }, 'Institucional': { subject: 'PULSO — Atualização documental', body: 'Prezado(a),\n\nNovos materiais documentais relevantes ao seu perfil foram adicionados.' } }, 'Estimular conclusão': { 'Orientativo': { subject: 'Aproveite ao máximo o ecossistema', body: 'Olá! Aproveite todas as funcionalidades disponíveis no ecossistema.' }, 'Direto': { subject: 'Explore todas as funcionalidades', body: 'Explore todas as funcionalidades disponíveis no ecossistema.' }, 'Institucional': { subject: 'PULSO — Maximizando sua experiência', body: 'Prezado(a),\n\nExplore todas as funcionalidades disponíveis para otimizar sua experiência.' } } },
-  'Novo': { 'Reduzir abandono': { 'Orientativo': { subject: 'Bem-vindo ao PULSO — comece por aqui', body: 'Olá! Bem-vindo(a) ao ecossistema Petronect.\n\nSiga o caminho recomendado para começar sua jornada.' }, 'Direto': { subject: 'Primeiros passos no PULSO', body: 'Bem-vindo! Siga o caminho recomendado na página inicial.' }, 'Institucional': { subject: 'PULSO — Boas-vindas ao ecossistema', body: 'Prezado(a),\n\nBem-vindo(a) ao ecossistema Petronect. Siga o guia de início na página inicial.' } }, 'Aumentar retorno': { 'Orientativo': { subject: 'Continue explorando o PULSO', body: 'Olá! Que tal explorar mais do ecossistema na sua próxima visita?' }, 'Direto': { subject: 'Mais para explorar', body: 'Novas áreas do ecossistema esperam por você.' }, 'Institucional': { subject: 'PULSO — Convite à continuação', body: 'Prezado(a),\n\nConvidamos a continuar explorando o ecossistema.' } }, 'Orientar acesso': { 'Orientativo': { subject: 'Guia de boas-vindas ao PULSO', body: 'Olá! Preparamos um Guia de boas-vindas para facilitar seu primeiro acesso.' }, 'Direto': { subject: 'Guia de primeiro acesso', body: 'Guia disponível na página inicial.' }, 'Institucional': { subject: 'PULSO — Guia de boas-vindas', body: 'Prezado(a),\n\nGuia de boas-vindas disponível para orientar seu primeiro acesso.' } }, 'Explicar documentação': { 'Orientativo': { subject: 'Documentação para novos usuários', body: 'Olá! A documentação tem materiais especiais para quem está começando.' }, 'Direto': { subject: 'Materiais para novos usuários', body: 'Materiais de introdução disponíveis na documentação.' }, 'Institucional': { subject: 'PULSO — Materiais introdutórios', body: 'Prezado(a),\n\nMateriais introdutórios disponíveis na seção de documentação.' } }, 'Estimular conclusão': { 'Orientativo': { subject: 'Complete seu cadastro inicial', body: 'Olá! Complete os passos iniciais para aproveitar o ecossistema.' }, 'Direto': { subject: 'Finalize seu início', body: 'Complete os passos iniciais na página de boas-vindas.' }, 'Institucional': { subject: 'PULSO — Complete seu acesso', body: 'Prezado(a),\n\nSugerimos completar os passos iniciais para otimizar sua experiência.' } } },
+  'Novo': { 'Reduzir abandono': { 'Orientativo': { subject: 'Bem-vindo ao PULSO — comece por aqui', body: 'Olá! Bem-vindo(a) ao ecossistema Petronect.\n\nSiga o caminho recomendado para começar sua jornada.' }, 'Direto': { subject: 'Primeiros passos no PULSO', body: 'Bem-vindo! Siga o caminho recomendado na página inicial.' }, 'Institucional': { subject: 'PULSO — Boas-vindas ao ecossistema', body: 'Prezado(a),\n\nBem-vindo(a) ao ecossistema Petronect. Siga o guia de início na página inicial.' } }, 'Aumentar retorno': { 'Orientativo': { subject: 'Continue explorando o PULSO', body: 'Olá! Que tal explorar mais do ecossistema na sua próxima visita?' }, 'Direto': { subject: 'Mais para explorar', body: 'Novas áreas do ecossistema esperam por você.' }, 'Institucional': { subject: 'PULSO — Convite à continuação', body: 'Prezado(a),\n\nConvidamos a continuar explorando o ecossistema.' } }, 'Orientar acesso': { 'Orientation': { subject: 'Guia de boas-vindas ao PULSO', body: 'Olá! Preparamos um guia de boas-vindas para facilitar seu primeiro acesso.' }, 'Direto': { subject: 'Guia de primeiro acesso', body: 'Guia disponível na página inicial.' }, 'Institucional': { subject: 'PULSO — Guia de boas-vindas', body: 'Prezado(a),\n\nGuia de boas-vindas disponível para orientar seu primeiro acesso.' } }, 'Explicar documentação': { 'Orientativo': { subject: 'Documentação para novos usuários', body: 'Olá! A documentação tem materiais especiais para quem está começando.' }, 'Direto': { subject: 'Materiais para novos usuários', body: 'Materiais de introdução disponíveis na documentação.' }, 'Institucional': { subject: 'PULSO — Materiais introdutórios', body: 'Prezado(a),\n\nMateriais introdutórios disponíveis na seção de documentação.' } }, 'Estimular conclusão': { 'Orientativo': { subject: 'Complete seu cadastro inicial', body: 'Olá! Complete os passos iniciais para aproveitar o ecossistema.' }, 'Direto': { subject: 'Finalize seu início', body: 'Complete os passos iniciais na página de boas-vindas.' }, 'Institucional': { subject: 'PULSO — Complete seu acesso', body: 'Prezado(a),\n\nSugerimos completar os passos iniciais para otimizar sua experiência.' } } },
   'Explorador': { 'Reduzir abandono': { 'Orientativo': { subject: 'Organize sua exploração no PULSO', body: 'Olá! Você explorou várias áreas do ecossistema. Que tal focar nas mais relevantes?' }, 'Direto': { subject: 'Foque nas áreas relevantes', body: 'Suas áreas mais acessadas foram identificadas. Acesse os atalhos.' }, 'Institucional': { subject: 'PULSO — Organização da sua navegação', body: 'Prezado(a),\n\nIdentificamos suas áreas de maior interesse para facilitar sua navegação.' } }, 'Aumentar retorno': { 'Orientativo': { subject: 'Novidades nas áreas que você visitou', body: 'Olá! Novidades foram adicionadas às áreas que você mais explorou.' }, 'Direto': { subject: 'Atualizações nas áreas visitadas', body: 'Atualizações disponíveis nas suas áreas mais acessadas.' }, 'Institucional': { subject: 'PULSO — Atualizações personalizadas', body: 'Prezado(a),\n\nAtualizações relevantes às suas áreas de interesse disponíveis.' } }, 'Orientar acesso': { 'Orientativo': { subject: 'Caminhos recomendados para sua exploração', body: 'Olá! Baseado no seu perfil, sugerimos estes caminhos no ecossistema.' }, 'Direto': { subject: 'Caminhos recomendados', body: 'Caminhos personalizados disponíveis na página inicial.' }, 'Institucional': { subject: 'PULSO — Caminhos recomendados', body: 'Prezado(a),\n\nCaminhos personalizados com base no seu padrão de navegação.' } }, 'Explicar documentação': { 'Orientativo': { subject: 'Documentação das áreas que você explorou', body: 'Olá! A documentação das áreas que você visitou está organizada e disponível.' }, 'Direto': { subject: 'Documentação por área de interesse', body: 'Documentação organizada por áreas. Acesse a seção correspondente.' }, 'Institucional': { subject: 'PULSO — Documentação organizada por área', body: 'Prezado(a),\n\nDocumentação organizada por áreas de maior interesse do ecossistema.' } }, 'Estimular conclusão': { 'Orientativo': { subject: 'Avance na sua jornada de exploração', body: 'Olá! Você explorou bastante. Que tal avançar em uma área específica?' }, 'Direto': { subject: 'Escolha uma área para avançar', body: 'Selecione uma área para avançar na sua jornada.' }, 'Institucional': { subject: 'PULSO — Próxima etapa da exploração', body: 'Prezado(a),\n\nSugerimos selecionar uma área para avançar na sua jornada de exploração.' } } },
   'Reengajado': { 'Reduzir abandono': { 'Orientativo': { subject: 'Bem-vindo de volta! O que mudou desde sua última visita', body: 'Olá! Que bom ter você de volta. Novidades foram adicionadas desde sua última visita.' }, 'Direto': { subject: 'Novidades desde sua última visita', body: 'Novidades disponíveis. Acesse o ecossistema para verificar.' }, 'Institucional': { subject: 'PULSO — Boas-vindas ao retorno', body: 'Prezado(a),\n\nBem-vindo(a) de volta. Novidades relevantes desde sua última visita.' } }, 'Aumentar retorno': { 'Orientativo': { subject: 'Continue sua jornada de onde parou', body: 'Olá! Retome sua jornada exatamente de onde você parou.' }, 'Direto': { subject: 'Retome sua atividade', body: 'Continue de onde parou. Atalho disponível na página inicial.' }, 'Institucional': { subject: 'PULSO — Continuidade do retorno', body: 'Prezado(a),\n\nSua jornada pode ser retomada de onde você parou.' } }, 'Orientar acesso': { 'Orientativo': { subject: 'Guia para retomar sua jornada', body: 'Olá! Preparamos um guia para facilitar sua retomada ao ecossistema.' }, 'Direto': { subject: 'Guia de retomada', body: 'Guia disponível na página inicial.' }, 'Institucional': { subject: 'PULSO — Guia de retomada', body: 'Prezado(a),\n\nGuia de retomada disponível para facilitar seu retorno.' } }, 'Explicar documentação': { 'Orientativo': { subject: 'Documentação atualizada para seu retorno', body: 'Olá! A documentação foi atualizada desde sua última visita.' }, 'Direto': { subject: 'Documentação atualizada', body: 'Novos materiais disponíveis na documentação.' }, 'Institucional': { subject: 'PULSO — Documentação atualizada para você', body: 'Prezado(a),\n\nDocumentação atualizada com materiais relevantes ao seu retorno.' } }, 'Estimular conclusão': { 'Orientativo': { subject: 'Complete sua jornada interrompida', body: 'Olá! Você pode concluir a jornada que havia iniciado.' }, 'Direto': { subject: 'Finalize sua jornada', body: 'Complete sua jornada pendente. Material disponível.' }, 'Institucional': { subject: 'PULSO — Conclusão da jornada', body: 'Prezado(a),\n\nSua jornada interrompida pode ser concluída agora.' } } },
 };
 
-export function generateCommunication(segment: string, channel: string, tone: string, objective: string, opportunityTitle?: string): { subject: string; body: string } {
+export const OBJECTIVE_GOALS: Record<string, string> = {
+  'Reduzir abandono': 'retomar a jornada com um caminho mais simples',
+  'Aumentar retorno': 'apresentar novidades relevantes para o retorno',
+  'Orientar acesso': 'orientar o acesso aos materiais e páginas corretos',
+  'Explicar documentação': 'explicar a estrutura da documentação disponível',
+  'Estimular conclusão': 'estimular a conclusão da atividade em andamento',
+};
+
+const TONE_STYLE: Record<string, { greeting: string; closing: string }> = {
+  Orientativo: { greeting: 'Olá!', closing: 'Conte conosco para seguir em frente.' },
+  Direto: { greeting: '', closing: '' },
+  Institucional: { greeting: 'Prezado(a),', closing: 'Atenciosamente,\nEquipe PULSO' },
+};
+
+export const OPPORTUNITY_OBJECTIVES: Record<string, string> = {
+  'opp-01': 'Explicar documentação',
+  'opp-02': 'Orientar acesso',
+  'opp-03': 'Aumentar retorno',
+  'opp-04': 'Reduzir abandono',
+  'opp-05': 'Orientar acesso',
+  'opp-06': 'Aumentar retorno',
+  'opp-07': 'Orientar acesso',
+};
+
+export function suggestedObjectiveFor(opportunityId: string | undefined, fallback = 'Reduzir abandono'): string {
+  return (opportunityId && OPPORTUNITY_OBJECTIVES[opportunityId]) || fallback;
+}
+
+function buildContextParagraph(segment: string, channel: string, objective: string, topic: string): string {
+  const goal = OBJECTIVE_GOALS[objective] || objective;
+  return `Contexto desta análise: o segmento ${segment} recebe esta orientação com o objetivo de ${goal}. A oportunidade de referência é "${topic}". O conteúdo será apresentado pelo canal ${channel.toLowerCase()} e permanece como rascunho sujeito à revisão humana.`;
+}
+
+function buildVariant(segment: string, channel: string, tone: string, objective: string, topic: string, variant: number): { subject: string; body: string } {
+  const normalizedTone = tone === 'Orientation' ? 'Orientativo' : tone;
+  const style = TONE_STYLE[normalizedTone] || TONE_STYLE.Orientativo;
+  const goal = OBJECTIVE_GOALS[objective] || objective;
+  const greeting = style.greeting ? `${style.greeting} ` : '';
+  const closing = style.closing ? `\n\n${style.closing}` : '';
+  const channelRef = channel.toLowerCase();
+  const variants: Array<{ subject: string; body: string }> = [
+    {
+      subject: `${topic} — orientação para ${segment.toLowerCase()}`,
+      body: `${greeting}Com base na oportunidade "${topic}", preparamos uma orientação para o segmento ${segment}. O objetivo desta comunicação é ${goal}. O conteúdo será apresentado pelo canal ${channelRef} e deve passar pela revisão humana antes de qualquer utilização.${closing}`,
+    },
+    {
+      subject: `${segment}: ${objective.toLowerCase()}`,
+      body: `${greeting}Identificamos um padrão relevante na navegação recente: o segmento ${segment} pode se beneficiar de uma ação para ${goal}. Esta mensagem está vinculada à oportunidade "${topic}", usa o canal ${channelRef} e é apenas um rascunho — a decisão final é humana.${closing}`,
+    },
+    {
+      subject: `Atendimento ao perfil ${segment.toLowerCase()} via ${channelRef}`,
+      body: `${greeting}Queremos facilitar o próximo passo da jornada. Para o segmento ${segment}, com foco em ${goal}, criamos um rascunho conectado à oportunidade "${topic}" e preparado para o canal ${channelRef}. O envio só ocorre após revisão e aprovação humanas.${closing}`,
+    },
+  ];
+  return variants[variant % variants.length];
+}
+
+export function generateCommunication(segment: string, channel: string, tone: string, objective: string, opportunityTitle?: string, variant = 0): { subject: string; body: string } {
   const normalizedTone = tone === 'Orientation' ? 'Orientativo' : tone;
   const templates = COMMUNICATION_TEMPLATES[segment]?.[objective]?.[normalizedTone];
-  if (templates) return { ...templates };
-  if (objective === 'Orientar acesso' && normalizedTone === 'Orientativo') {
-    const topic = opportunityTitle?.trim() || 'oportunidade recomendada';
+  const topic = opportunityTitle?.trim() || 'oportunidade recomendada';
+  if (variant === 0 && templates) {
+    const context = buildContextParagraph(segment, channel, objective, topic);
+    return { subject: templates.subject, body: `${templates.body}\n\n${context}` };
+  }
+  if (variant === 0 && objective === 'Orientar acesso' && normalizedTone === 'Orientativo') {
     return {
       subject: `Guia para ${segment.toLowerCase()} — ${topic}`,
-      body: `Olá! Preparamos um guia para facilitar seu acesso à oportunidade mais relevante.\n\nAcesse "${topic}" e siga o caminho recomendado para continuar sua jornada no ecossistema Petronect.`,
+      body: `Olá! Preparamos um guia para facilitar seu acesso à oportunidade mais relevante.\n\nAcesse "${topic}" e siga o caminho recomendado para continuar sua jornada no ecossistema Petronect.\n\n${buildContextParagraph(segment, channel, objective, topic)}`,
     };
   }
-  const defaults: Record<string, { subject: string; body: string }> = {
-    'E-mail': { subject: `PULSO — Comunicação para ${segment.toLowerCase()}`, body: `Prezado(a),\n\nIdentificamos uma oportunidade relevante para seu perfil de navegação no ecossistema Petronect.\n\n${objective === 'Reduzir abandono' ? 'Sugerimos retomar sua jornada com o caminho simplificado.' : objective === 'Aumentar retorno' ? 'Novidades relevantes estão disponíveis para seu perfil.' : 'Material de apoio disponível na documentação.'}\n\nAcesse o ecossistema para mais informações.\n\nAtenciosamente,\nEquipe PULSO` },
-    'Banner no portal': { subject: `Novidade para ${segment.toLowerCase()}`, body: `${objective === 'Reduzir abandono' ? 'Caminho simplificado disponível.' : 'Novidades relevantes para você.'} Acesse o ecossistema para mais detalhes.` },
-    'Notificação': { subject: `PULSO — ${segment}`, body: `${objective === 'Reduzir abandono' ? 'Retome sua jornada.' : 'Veja as novidades.'} Material disponível.` },
-  };
-  return defaults[channel] || defaults['E-mail'];
+  if (variant === 0) {
+    const defaults: Record<string, { subject: string; body: string }> = {
+      'E-mail': { subject: `PULSO — Comunicação para ${segment.toLowerCase()}`, body: `Prezado(a),\n\nIdentificamos uma oportunidade relevante para seu perfil de navegação no ecossistema Petronect.\n\n${objective === 'Reduzir abandono' ? 'Sugerimos retomar sua jornada com o caminho simplificado.' : objective === 'Aumentar retorno' ? 'Novidades relevantes estão disponíveis para seu perfil.' : 'Material de apoio disponível na documentação.'}\n\nAcesse o ecossistema para mais informações.\n\nAtenciosamente,\nEquipe PULSO` },
+      'Banner no portal': { subject: `Novidade para ${segment.toLowerCase()}`, body: `${objective === 'Reduzir abandono' ? 'Caminho simplificado disponível.' : 'Novidades relevantes para você.'} Acesse o ecossistema para mais detalhes.` },
+      'Notificação': { subject: `PULSO — ${segment}`, body: `${objective === 'Reduzir abandono' ? 'Retome sua jornada.' : 'Veja as novidades.'} Material disponível.` },
+    };
+    const base = defaults[channel] || defaults['E-mail'];
+    return { subject: base.subject, body: `${base.body}\n\n${buildContextParagraph(segment, channel, objective, topic)}` };
+  }
+  return buildVariant(segment, channel, tone, objective, topic, variant - 1);
 }
 
 export type MessageTemplate = { segment: SegmentKey; channel: string; tone: string; objective: string; opportunity: string };

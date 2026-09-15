@@ -1,0 +1,11 @@
+﻿import { generateDefaultEvents, computeAll, DEFAULT_FILTERS, parseCSV, CSV_EXAMPLE } from "../src/data/pulso-data.ts";
+const ev = generateDefaultEvents();
+console.log("total events:", ev.length);
+const c = computeAll(ev, DEFAULT_FILTERS);
+console.log("opps:", c.allOpportunities.map(o => o.id + " | " + o.title + " | affected=" + o.affectedUsers + " | seg=" + o.segment));
+const types = {};
+ev.forEach(e => types[e.user_type] = (types[e.user_type]||0)+1);
+console.log("user types counts:", types);
+console.log("unique users:", new Set(ev.map(e=>e.user_id)).size);
+const r = parseCSV(CSV_EXAMPLE);
+console.log("csv parse:", JSON.stringify(r.stats), "errors:", r.errors.length);
