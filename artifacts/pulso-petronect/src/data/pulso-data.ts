@@ -284,7 +284,9 @@ export function computeAll(events: AccessEvent[], filters: Filters, now?: Date) 
   const prevAvgDuration = prevEvents.length > 0 ? prevEvents.reduce((sum, e) => sum + e.duration_seconds, 0) / prevEvents.length : avgDurationSecs;
   const prevDurationChange = prevAvgDuration > 0 ? ((avgDurationSecs - prevAvgDuration) / prevAvgDuration) * 100 : 0;
   const userSegments = computeUserSegments(filtered, filters, now);
+  const previousSegments = computeUserSegments(prevEvents, filters, now);
   const difficultyUsers = userSegments.filter(s => s.key === 'Com dificuldade').reduce((sum, s) => sum + s.count, 0);
+  const previousDifficultyUsers = previousSegments.filter(s => s.key === 'Com dificuldade').reduce((sum, s) => sum + s.count, 0);
   const opportunities = computeOpportunities(filtered, userSegments, filters);
   const prevOpps = computeOpportunities(prevEvents, computeUserSegments(prevEvents, filters, now), filters);
   const formatDuration = (s: number) => { const m = Math.floor(s / 60); const sec = Math.floor(s % 60); return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`; };
@@ -299,7 +301,7 @@ export function computeAll(events: AccessEvent[], filters: Filters, now?: Date) 
     changeUsers: prevUsers.size > 0 ? Math.round(((users.size - prevUsers.size) / prevUsers.size) * 100 * 10) / 10 : 0,
     changeReturn: prevReturnRate > 0 ? Math.round((returnRate - prevReturnRate) * 10) / 10 : 0,
     changeDuration: Math.round(prevDurationChange * 10) / 10,
-    changeDifficulty: -6.3,
+    changeDifficulty: previousDifficultyUsers > 0 ? Math.round(((difficultyUsers - previousDifficultyUsers) / previousDifficultyUsers) * 100 * 10) / 10 : 0,
     changeOpportunities: prevOpps.length > 0 ? Math.round(((opportunities.length - prevOpps.length) / prevOpps.length) * 100 * 10) / 10 : 0,
   };
   const accessTrend = computeAccessTrend(filtered);

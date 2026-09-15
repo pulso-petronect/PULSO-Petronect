@@ -50,6 +50,18 @@ describe('computeAll and filters', () => {
     expect(computed.allSegments.length).toBeGreaterThan(0);
     expect(computed.allOpportunities.length).toBeGreaterThan(0);
   });
+
+  it('applies segment, priority, and opportunity-status filters', () => {
+    const events = generateDefaultEvents();
+    const base = { period: '30 dias', userType: 'Todos', page: 'Todas', segment: 'Todos', priority: 'Todas', oppStatus: 'Todas' } as const;
+    const highPriority = computeAll(events, { ...base, priority: 'Alta' });
+    const newOpportunities = computeAll(events, { ...base, oppStatus: 'Nova' });
+    const interested = computeAll(events, { ...base, segment: 'Interessado' });
+
+    expect(highPriority.opportunities.every(opportunity => opportunity.severity === 'Alta')).toBe(true);
+    expect(newOpportunities.opportunities.every(opportunity => opportunity.status === 'Nova')).toBe(true);
+    expect(interested.segments.every(segment => segment.key === 'Interessado' || segment.count === 0)).toBe(true);
+  });
 });
 
 describe('communication generation', () => {
