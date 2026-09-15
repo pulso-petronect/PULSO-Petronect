@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, useMemo, type ComponentType, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type ComponentType, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Link, Route, Switch, Router as WouterRouter, useLocation } from 'wouter';
+import { Link, Route, Switch, Router as WouterRouter, useLocation, useSearch } from 'wouter';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { toast } from '@/hooks/use-toast';
 import {
   Activity, ArrowDownRight, ArrowUpRight, BookOpen, Check,
   ChevronDown, ChevronLeft, ChevronRight, Circle, Clock3, Copy, Cpu, Database, Download, FileText,
@@ -19,6 +20,7 @@ import {
 } from 'recharts';
 import {
   AccessEvent,
+  CHANNELS,
   clearStored,
   computeAll,
   computeBaseInfo,
@@ -29,11 +31,14 @@ import {
   generateDefaultEvents,
   getStored,
   navItems,
+  OBJECTIVES,
   parseCSV,
   setStored,
   supportItems,
+  suggestedObjectiveFor,
   TEAM_INITIALS,
   TEAM_MEMBERS,
+  TONES,
   type BaseSource,
   type ComputedSegment,
   type ComputedOpportunity,
@@ -54,6 +59,87 @@ const Icon = ({ name, ...props }: { name: string } & IconProps) => {
 };
 
 const cn = (...values: Array<string | false | null | undefined>) => values.filter(Boolean).join(' ');
+
+function formatLastAnalyzed(iso: string | null): string {
+  if (!iso) return 'nunca';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return 'nunca';
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function useModalA11y(open: boolean, onClose: () => void, dialogRef: React.RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const node = dialogRef.current;
+    if (!node) return;
+    const focusables = node.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    (focusables[0] || node).focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const list = Array.from(focusables).filter(el => !el.hasAttribute('disabled'));
+      if (list.length === 0) return;
+      const first = list[0];
+      const last = list[list.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previous?.focus?.();
+    };
+  }, [open, onClose, dialogRef]);
+}
+
+function opportunityCommunicationHref(item: ComputedOpportunity): string {
+  return `/comunicacao?oportunidade=${encodeURIComponent(item.id)}&segmento=${encodeURIComponent(item.segment)}&objetivo=${encodeURIComponent(suggestedObjectiveFor(item.id))}`;
+}
+
+function OpportunityMenu({ item, onCopy, onMarkInReview, createHref }: { item: ComputedOpportunity; onCopy: (text: string) => void; onMarkInReview: (id: string) => void; createHref: string }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const onClickOutside = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    document.addEventListener('keydown', onKey);
+    menuRef.current?.querySelector<HTMLElement>('[data-menu-action]')?.focus?.();
+    return () => {
+      document.removeEventListener('mousedown', onClickOutside);
+      document.removeEventListener('keydown', onKey);
+      previous?.focus?.();
+    };
+  }, [open]);
+  return <div className="relative shrink-0" ref={rootRef}>
+    <button onClick={e => { e.stopPropagation(); setOpen(o => !o); }} aria-label={`Ações para ${item.title}`} aria-haspopup="menu" aria-expanded={open} data-testid={`button-opportunity-menu-${item.id}`} className={cn('grid h-8 w-8 place-items-center rounded-lg border border-transparent text-[#7D8D9E] hover:border-[#D7E0EA] hover:bg-[#F2F6FA] hover:text-[#123F73]', open && 'border-[#D7E0EA] bg-[#F2F6FA] text-[#123F73]')}><MoreHorizontal size={17} /></button>
+    {open && <div role="menu" aria-label={`Ações para ${item.title}`} ref={menuRef} data-testid={`menu-opportunity-${item.id}`} className="absolute right-0 top-9 z-20 w-60 overflow-hidden rounded-xl border border-[#DFE7EF] bg-white p-1.5 shadow-[0_14px_40px_rgba(18,36,58,.18)]">
+      <button role="menuitem" data-menu-action data-testid={`menu-opportunity-copy-${item.id}`} onClick={() => { onCopy(`${item.title}\n${item.summary}\nRegra: ${item.rule}`); setOpen(false); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-[#52657A] hover:bg-[#F2F6FA] hover:text-[#123F73]"><Copy size={14} />Copiar resumo</button>
+      <button role="menuitem" data-testid={`menu-opportunity-review-${item.id}`} onClick={() => { onMarkInReview(item.id); setOpen(false); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-[#52657A] hover:bg-[#F2F6FA] hover:text-[#123F73]"><Search size={14} />Marcar como em análise</button>
+      <Link href={createHref} role="menuitem" data-testid={`menu-opportunity-communicate-${item.id}`} onClick={() => setOpen(false)} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-[#123F73] hover:bg-[#EAF1F8]"><MessageSquareText size={14} />Criar comunicação</Link>
+    </div>}
+  </div>;
+}
 
 export type DemoTarget = { opportunityId?: string; segment?: SegmentKey; objective?: string; tone?: string; approve?: boolean };
 type DemoStep = { eyebrow: string; title: string; text: string; navigate?: string; target?: DemoTarget };
@@ -200,10 +286,12 @@ function PageHeader({ eyebrow, title, description, actions }: { eyebrow?: string
 function GuidedDemo({ step, stepMeta, onNext, onPrev, onRestart, onEnd, onClose }: { step: number; stepMeta: DemoStep; onNext: () => void; onPrev: () => void; onRestart: () => void; onEnd: () => void; onClose: () => void }) {
   const total = DEMO_STEPS.length;
   const isLast = step === total - 1;
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(true, onClose, panelRef);
   return <div className="fixed inset-x-0 bottom-3 z-50 flex justify-center px-3 md:bottom-5 md:px-6">
-    <div className="w-full max-w-4xl overflow-hidden rounded-2xl border border-[#D8D0C1] bg-white shadow-[0_18px_50px_rgba(18,36,58,.28)]">
+    <div ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="guided-demo-title" className="w-full max-w-4xl overflow-hidden rounded-2xl border border-[#D8D0C1] bg-white shadow-[0_18px_50px_rgba(18,36,58,.28)]">
       <div className="flex items-center justify-between gap-3 bg-[#123F73] px-4 py-2.5">
-        <div className="flex min-w-0 items-center gap-3"><span className="hidden h-2 w-2 shrink-0 rounded-full bg-[#62BD4D] sm:block" /><div className="min-w-0"><div className="truncate text-[10px] font-bold uppercase tracking-[.16em] text-[#9BD68D]">{stepMeta.eyebrow} · Passo {step + 1} de {total}</div><div className="truncate font-display text-sm font-bold text-white">{stepMeta.title}</div></div></div>
+        <div className="flex min-w-0 items-center gap-3"><span className="hidden h-2 w-2 shrink-0 rounded-full bg-[#62BD4D] sm:block" /><div className="min-w-0"><div className="truncate text-[10px] font-bold uppercase tracking-[.16em] text-[#9BD68D]">{stepMeta.eyebrow} · Passo {step + 1} de {total}</div><div id="guided-demo-title" className="truncate font-display text-sm font-bold text-white">{stepMeta.title}</div></div></div>
         <div className="flex shrink-0 items-center gap-2"><button onClick={onRestart} data-testid="button-demo-restart" className="rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-white/70 hover:bg-white/10 hover:text-white"><RotateCcw size={13} className="mr-1 inline" />Reiniciar</button><button onClick={onClose} aria-label="Encerrar demonstração" data-testid="button-close-demo" className="rounded-lg p-2 text-white/70 hover:bg-white/10 hover:text-white"><X size={16} /></button></div>
       </div>
       <div className="px-4 py-3 md:px-5">
@@ -217,6 +305,8 @@ function GuidedDemo({ step, stepMeta, onNext, onPrev, onRestart, onEnd, onClose 
 
 function BaseInfoDialog({ open, onClose, source, info }: { open: boolean; onClose: () => void; source: BaseSource; info: { eventos: number; usuarios: number; inicio: string; fim: string } }) {
   if (!open) return null;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalA11y(open, onClose, dialogRef);
   const rows: Array<[string, string]> = [
     ['Origem da base', source.mode === 'importada' ? `Arquivo importado: ${source.file || 'CSV anônimo'}` : 'Base simulada gerada localmente'],
     ['Quantidade de eventos', String(info.eventos)],
@@ -224,9 +314,9 @@ function BaseInfoDialog({ open, onClose, source, info }: { open: boolean; onClos
     ['Período analisado', `${info.inicio} a ${info.fim}`],
     ['Data e horário do processamento', formatProcessedAt(source.processedAt)],
   ];
-  return <div className="fixed inset-0 z-50 grid place-items-center bg-[#12243a]/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
-    <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
-      <div className="flex items-center justify-between bg-[#123F73] px-5 py-4 text-white"><div><div className="text-[10px] font-bold uppercase tracking-[.16em] text-[#9BD68D]">Origem dos dados</div><h2 className="mt-1 font-display text-lg font-bold">{source.mode === 'importada' ? 'Base importada' : 'Base demonstrativa'}</h2></div><button onClick={onClose} aria-label="Fechar" data-testid="button-close-base-dialog" className="rounded-lg p-2 text-white/70 hover:bg-white/10 hover:text-white"><X size={16} /></button></div>
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-[#12243a]/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="base-info-title">
+    <div ref={dialogRef} className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
+      <div className="flex items-center justify-between bg-[#123F73] px-5 py-4 text-white"><div><div className="text-[10px] font-bold uppercase tracking-[.16em] text-[#9BD68D]">Origem dos dados</div><h2 id="base-info-title" className="mt-1 font-display text-lg font-bold">{source.mode === 'importada' ? 'Base importada' : 'Base demonstrativa'}</h2></div><button onClick={onClose} aria-label="Fechar" data-testid="button-close-base-dialog" className="rounded-lg p-2 text-white/70 hover:bg-white/10 hover:text-white"><X size={16} /></button></div>
       <div className="divide-y divide-[#EDF1F5] p-5">{rows.map(([label, value]) => <div key={label} className="flex items-center justify-between gap-4 py-3 text-sm"><span className="shrink-0 text-[#7D8D9E]">{label}</span><span className="text-right font-semibold text-[#34485D]">{value}</span></div>)}</div>
       <div className="border-t border-[#EDE8DC] bg-[#F8FAFC] px-5 py-3 text-[11px] leading-5 text-[#849083]"><Info size={12} className="mr-1 inline" />{source.mode === 'simulada' ? 'Dados simulados para demonstração — não representam resultados reais da Petronect.' : 'Dados importados localmente a partir de um CSV anonimizado. Nenhum dado sai da máquina.'}</div>
     </div>
