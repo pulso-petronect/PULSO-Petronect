@@ -1,15 +1,16 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type ComponentType, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Link, Route, Switch, Router as WouterRouter, useLocation } from 'wouter';
+import { Link, Route, Switch, Router as WouterRouter, useLocation, useSearch } from 'wouter';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { toast } from '@/hooks/use-toast';
 import {
   Activity, ArrowDownRight, ArrowUpRight, BookOpen, Check,
-  ChevronDown, ChevronLeft, ChevronRight, Circle, Clock3, Copy, Download, FileText,
-  Filter, Info, Lightbulb, ListFilter, LockKeyhole, LogIn, LogOut, Mail, Menu,
-  MessageSquareText, MoreHorizontal, Play, Plus, RefreshCw, Repeat2, Route as RouteIcon,
-  Search, Send, Settings2, Sparkles, Target, TriangleAlert, UploadCloud, Users,
+  ChevronDown, ChevronLeft, ChevronRight, Circle, Clock3, Copy, Cpu, Database, Download, FileText,
+  Filter, Gauge, Info, Lightbulb, ListFilter, LockKeyhole, LogIn, LogOut, Mail, Menu,
+  MessageSquareText, MoreHorizontal, MoveRight, Play, RefreshCw, Repeat2, Route as RouteIcon,
+  RotateCcw, Search, Send, Settings2, ShieldCheck, Sparkles, Target, TrendingUp, TriangleAlert, UploadCloud, Users,
   UsersRound, X, LayoutDashboard,
 } from 'lucide-react';
 import {
@@ -19,26 +20,30 @@ import {
 } from 'recharts';
 import {
   AccessEvent,
+  CHANNELS,
   clearStored,
   computeAll,
+  computeBaseInfo,
   CSV_EXAMPLE,
+  DEFAULT_FILTERS,
+  formatProcessedAt,
   generateCommunication,
   generateDefaultEvents,
   getStored,
   navItems,
+  OBJECTIVES,
   parseCSV,
   setStored,
   supportItems,
+  suggestedObjectiveFor,
   TEAM_INITIALS,
   TEAM_MEMBERS,
-  type AccessTrendDay,
+  TONES,
+  type BaseSource,
   type ComputedSegment,
   type ComputedOpportunity,
   type Filters,
-  type HourlyAccess,
-  type PageRanking,
   type SegmentKey,
-  eventsToCSV,
 } from '@/data/pulso-data';
 
 const queryClient = new QueryClient();
@@ -54,6 +59,176 @@ const Icon = ({ name, ...props }: { name: string } & IconProps) => {
 };
 
 const cn = (...values: Array<string | false | null | undefined>) => values.filter(Boolean).join(' ');
+
+function formatLastAnalyzed(iso: string | null): string {
+  if (!iso) return 'nunca';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return 'nunca';
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function useModalA11y(open: boolean, onClose: () => void, dialogRef: React.RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const node = dialogRef.current;
+    if (!node) return;
+    const focusables = node.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    (focusables[0] || node).focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const list = Array.from(focusables).filter(el => !el.hasAttribute('disabled'));
+      if (list.length === 0) return;
+      const first = list[0];
+      const last = list[list.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previous?.focus?.();
+    };
+  }, [open, onClose, dialogRef]);
+}
+
+function opportunityCommunicationHref(item: ComputedOpportunity): string {
+  return `/comunicacao?oportunidade=${encodeURIComponent(item.id)}&segmento=${encodeURIComponent(item.segment)}&objetivo=${encodeURIComponent(suggestedObjectiveFor(item.id))}`;
+}
+
+function OpportunityMenu({ item, onCopy, onMarkInReview, createHref }: { item: ComputedOpportunity; onCopy: (text: string) => void; onMarkInReview: (id: string) => void; createHref: string }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const onClickOutside = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    document.addEventListener('keydown', onKey);
+    menuRef.current?.querySelector<HTMLElement>('[data-menu-action]')?.focus?.();
+    return () => {
+      document.removeEventListener('mousedown', onClickOutside);
+      document.removeEventListener('keydown', onKey);
+      previous?.focus?.();
+    };
+  }, [open]);
+  return <div className="relative shrink-0" ref={rootRef}>
+    <button onClick={e => { e.stopPropagation(); setOpen(o => !o); }} aria-label={`Ações para ${item.title}`} aria-haspopup="menu" aria-expanded={open} data-testid={`button-opportunity-menu-${item.id}`} className={cn('grid h-8 w-8 place-items-center rounded-lg border border-transparent text-[#7D8D9E] hover:border-[#D7E0EA] hover:bg-[#F2F6FA] hover:text-[#123F73]', open && 'border-[#D7E0EA] bg-[#F2F6FA] text-[#123F73]')}><MoreHorizontal size={17} /></button>
+    {open && <div role="menu" aria-label={`Ações para ${item.title}`} ref={menuRef} data-testid={`menu-opportunity-${item.id}`} className="absolute right-0 top-9 z-20 w-60 overflow-hidden rounded-xl border border-[#DFE7EF] bg-white p-1.5 shadow-[0_14px_40px_rgba(18,36,58,.18)]">
+      <button role="menuitem" data-menu-action data-testid={`menu-opportunity-copy-${item.id}`} onClick={() => { onCopy(`${item.title}\n${item.summary}\nRegra: ${item.rule}`); setOpen(false); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-[#52657A] hover:bg-[#F2F6FA] hover:text-[#123F73]"><Copy size={14} />Copiar resumo</button>
+      <button role="menuitem" data-testid={`menu-opportunity-review-${item.id}`} onClick={() => { onMarkInReview(item.id); setOpen(false); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-[#52657A] hover:bg-[#F2F6FA] hover:text-[#123F73]"><Search size={14} />Marcar como em análise</button>
+      <Link href={createHref} role="menuitem" data-testid={`menu-opportunity-communicate-${item.id}`} onClick={() => setOpen(false)} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-xs font-semibold text-[#123F73] hover:bg-[#EAF1F8]"><MessageSquareText size={14} />Criar comunicação</Link>
+    </div>}
+  </div>;
+}
+
+export type DemoTarget = { opportunityId?: string; segment?: SegmentKey; objective?: string; tone?: string; approve?: boolean };
+type DemoStep = { eyebrow: string; title: string; text: string; navigate?: string; target?: DemoTarget };
+const DEMO_STEPS: DemoStep[] = [
+  {
+    eyebrow: 'Demonstração guiada',
+    title: 'Do clique à decisão',
+    text: 'Hoje, a Petronect enxerga cliques. Com o PULSO, ela entende comportamentos e sabe qual decisão tomar. O PULSO transforma registros de navegação em evidências, identifica possíveis barreiras e oportunidades e recomenda a próxima ação de comunicação.\n\nVamos acompanhar um caso: acesso repetido à documentação sem conclusão da próxima etapa.',
+  },
+  {
+    eyebrow: 'Caso principal',
+    title: 'Um grupo que repete acesso',
+    text: 'A Central de Oportunidades é onde o comportamento vira sinal. Veja o alerta "Possível barreira documental": um grupo de usuários acessou a área de documentação repetidamente.',
+    navigate: '/oportunidades',
+    target: { opportunityId: 'opp-01' },
+  },
+  {
+    eyebrow: 'Evidência',
+    title: 'Acesso repetido, próxima etapa não concluída',
+    text: 'O alerta identificou que esses usuários não concluíram a próxima etapa da jornada após os acessos à documentação.\n\nO número de usuários afetados foi calculado a partir da base.',
+  },
+  {
+    eyebrow: 'Hipótese',
+    title: 'Hipótese: possível barreira documental',
+    text: 'Hipótese: dificuldade para localizar ou compreender os requisitos documentais.\n\nÉ uma hipótese — não uma certeza. O PULSO propõe, a equipe confirma.',
+  },
+  {
+    eyebrow: 'Evidências e regra',
+    title: 'Evidências e regra utilizada',
+    text: 'Evidência 1: quatro ou mais acessos à documentação no período.\nEvidência 2: nenhuma ação concluída após esses acessos.\n\nA regra que gerou o alerta: "Acesso repetido à documentação (4+) sem conclusão de ação".',
+  },
+  {
+    eyebrow: 'Decisão',
+    title: 'Prioridade e confiança',
+    text: 'O alerta tem prioridade ALTA e nível de confiança calculado a partir da base.\n\nIsso mostra por que ele merece atenção em relação aos demais sinais identificados.',
+  },
+  {
+    eyebrow: 'Recomendação',
+    title: 'A próxima ação recomendada',
+    text: 'Ação recomendada: enviar orientação segmentada com caminho direto para os materiais mais acessados da documentação.\n\nA decisão final continua sendo humana.',
+  },
+  {
+    eyebrow: 'Comunicação inteligente',
+    title: 'Da hipótese à comunicação',
+    text: 'Vou abrir a Comunicação Inteligente para gerar uma mensagem contextualizada. O segmento "Com dificuldade" já está selecionado.',
+    navigate: '/comunicacao',
+    target: { segment: 'Com dificuldade', objective: 'Explicar documentação', tone: 'Orientativo' },
+  },
+  {
+    eyebrow: 'Rascunho',
+    title: 'Mensagem orientativa',
+    text: 'A mensagem foi gerada a partir da oportunidade. Ela traz um caminho direto para o material documental.\n\nRepare: a mensagem continua editável e em revisão pendente.',
+  },
+  {
+    eyebrow: 'Simulação',
+    title: 'Revisão humana',
+    text: 'A aprovação final é sempre humana. Vou aprovar apenas como simulação — nenhuma mensagem real é enviada.',
+    target: { approve: true },
+  },
+  {
+    eyebrow: 'Acompanhamento',
+    title: 'Como acompanhar o resultado',
+    text: 'Métrica de acompanhamento definida para esta comunicação: taxa de conclusão de ações do segmento antes e depois.\n\nNa visão geral, há uma área de impacto potencial com indicadores a serem validados em um projeto-piloto.',
+    navigate: '/',
+  },
+  {
+    eyebrow: 'Encerramento',
+    title: 'Demonstração encerrada',
+    text: 'Comportamento observado → evidência → hipótese → prioridade → recomendação → comunicação.\n\nAgora você pode navegar livremente. A base permanece demonstrativa e local. Use "Restaurar demonstração" a qualquer momento.',
+  },
+];
+
+const IMPACT_INDICATORS: Array<{ label: string; kind: 'Meta' | 'Estimativa' | 'Projeção' | 'Impacto potencial'; text: string }> = [
+  { label: 'Redução de jornadas abandonadas', kind: 'Meta', text: 'Comparar a taxa de abandono de jornada antes e depois de cada comunicação.' },
+  { label: 'Aumento da taxa de retorno', kind: 'Meta', text: 'Medir o retorno dos usuários orientados em até 7 dias após a comunicação.' },
+  { label: 'Crescimento da conclusão de ações', kind: 'Meta', text: 'Acompanhar a conclusão de ações do segmento orientado no período seguinte.' },
+  { label: 'Redução de acessos repetidos por dificuldade', kind: 'Estimativa', text: 'Projetar a queda de acessos e buscas repetidas após a orientação de caminho.' },
+  { label: 'Taxa de resposta às comunicações', kind: 'Projeção', text: 'Estimar a adesão com base em taxas observáveis do próprio portal no projeto-piloto.' },
+  { label: 'Tempo entre identificação e ação', kind: 'Impacto potencial', text: 'Acompanhar o tempo entre o alerta gerado e a comunicação aprovada pela revisão humana.' },
+];
+
+const VALUE_CHAIN = ['Comportamento', 'Evidência', 'Hipótese', 'Prioridade', 'Recomendação', 'Comunicação'];
+
+const PRODUCTION_PHASES: Array<{ phase: string; title: string; text: string }> = [
+  { phase: 'Fase 1', title: 'Piloto', text: 'Importar dados anonimizados e validar as regras com a Petronect.' },
+  { phase: 'Fase 2', title: 'Integração', text: 'Conectar o PULSO às fontes autorizadas do portal.' },
+  { phase: 'Fase 3', title: 'Ativação', text: 'Integrar os canais de comunicação, sempre com aprovação humana.' },
+  { phase: 'Fase 4', title: 'Mensuração', text: 'Comparar abandono, retorno e conclusão antes e depois das ações.' },
+];
 
 function Logo({ compact = false, onLight = false }: { compact?: boolean; onLight?: boolean }) {
   if (!compact) {
@@ -118,16 +293,7 @@ function InfoModal({ detail, onClose }: { detail: MethodologyDetail; onClose: ()
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
-  return <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-[#12243a]/55 p-4" role="dialog" aria-modal="true" aria-labelledby="info-modal-title" onKeyDown={trapFocus} onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className="my-6 w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
-      <div className="flex items-start justify-between gap-4"><h2 id="info-modal-title" className="font-display text-2xl font-bold text-[#172033]">{detail.title}</h2><button ref={closeButtonRef} onClick={onClose} aria-label="Fechar modal" className="rounded-lg p-2 text-[#718296] hover:bg-[#EEF2F5]"><X size={18} /></button></div>
-      <p className="mt-5 text-sm leading-7 text-[#52657A]">{detail.description}</p>
-      <div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="rounded-xl bg-[#F7F9FB] p-4"><div className="text-[10px] font-bold uppercase tracking-[.16em] text-[#1E5799]">Dados utilizados</div><p className="mt-2 text-sm leading-6 text-[#52657A]">{detail.data}</p></div><div className="rounded-xl bg-[#F7F9FB] p-4"><div className="text-[10px] font-bold uppercase tracking-[.16em] text-[#1E5799]">Resultado produzido</div><p className="mt-2 text-sm leading-6 text-[#52657A]">{detail.result}</p></div></div>
-      <div className="mt-3 rounded-xl border border-[#CBE0F1] bg-[#F2F7FB] p-4"><div className="text-[10px] font-bold uppercase tracking-[.16em] text-[#1E5799]">Exemplo aplicado ao PULSO</div><p className="mt-2 text-sm leading-6 text-[#52657A]">{detail.example}</p></div>
-      <div className="mt-3 rounded-xl border border-[#E5D8B9] bg-[#FFF9EC] p-4"><div className="text-[10px] font-bold uppercase tracking-[.16em] text-[#956A1B]">Cuidado de privacidade</div><p className="mt-2 text-sm leading-6 text-[#6F613F]">{detail.privacy}</p></div>
-      <Button className="mt-6 w-full" onClick={onClose}>Fechar</Button>
-    </div>
-  </div>;
+  return <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-[#12243a]/55 p-4" role="dialog" aria-modal="true" aria-labelledby="info-modal-title" onKeyDown={trapFocus} onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}><div className="my-6 w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"><div className="flex items-start justify-between gap-4"><h2 id="info-modal-title" className="font-display text-2xl font-bold text-[#172033]">{detail.title}</h2><button ref={closeButtonRef} onClick={onClose} aria-label="Fechar modal" className="rounded-lg p-2 text-[#718296] hover:bg-[#EEF2F5]"><X size={18} /></button></div><p className="mt-5 text-sm leading-7 text-[#52657A]">{detail.description}</p><div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="rounded-xl bg-[#F7F9FB] p-4"><div className="text-[10px] font-bold uppercase tracking-[.16em] text-[#1E5799]">Dados utilizados</div><p className="mt-2 text-sm leading-6 text-[#52657A]">{detail.data}</p></div><div className="rounded-xl bg-[#F7F9FB] p-4"><div className="text-[10px] font-bold uppercase tracking-[.16em] text-[#1E5799]">Resultado produzido</div><p className="mt-2 text-sm leading-6 text-[#52657A]">{detail.result}</p></div></div><div className="mt-3 rounded-xl border border-[#CBE0F1] bg-[#F2F7FB] p-4"><div className="text-[10px] font-bold uppercase tracking-[.16em] text-[#1E5799]">Exemplo aplicado ao PULSO</div><p className="mt-2 text-sm leading-6 text-[#52657A]">{detail.example}</p></div><div className="mt-3 rounded-xl border border-[#E5D8B9] bg-[#FFF9EC] p-4"><div className="text-[10px] font-bold uppercase tracking-[.16em] text-[#956A1B]">Cuidado de privacidade</div><p className="mt-2 text-sm leading-6 text-[#6F613F]">{detail.privacy}</p></div><Button className="mt-6 w-full" onClick={onClose}>Fechar</Button></div></div>;
 }
 
 function PageHeader({ eyebrow, title, description, actions }: { eyebrow?: string; title: string; description?: string; actions?: ReactNode }) {
@@ -139,23 +305,42 @@ function PageHeader({ eyebrow, title, description, actions }: { eyebrow?: string
   </div>;
 }
 
-function GuidedDemo({ onClose, onGoOpportunity }: { onClose: () => void; onGoOpportunity: () => void }) {
-  const [step, setStep] = useState(0);
-  const steps = [
-    { title: 'Cenário geral', text: 'Comece pela visão executiva: veja o volume de acessos, a evolução do retorno e os sinais que merecem atenção.', action: 'Explorar o cenário' },
-    { title: 'Abrir oportunidade', text: 'Acesse a Central de Oportunidades para transformar um padrão de navegação em uma hipótese de ação.', action: 'Abrir oportunidade' },
-    { title: 'Exibir evidências', text: 'Confira os sinais que sustentam a recomendação. Toda oportunidade mantém seu contexto explicável.', action: 'Ver evidências' },
-    { title: 'Gerar comunicação', text: 'Escolha o segmento e gere uma mensagem contextual. A aprovação final continua humana.', action: 'Gerar comunicação' },
-  ];
-  const current = steps[step];
-  return <div className="fixed inset-0 z-50 grid place-items-center bg-[#12243a]/55 p-4 backdrop-blur-sm">
-    <div className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl">
-      <div className="flex items-center justify-between bg-[#123F73] p-5 text-white"><div><div className="text-[10px] font-bold uppercase tracking-[.18em] text-[#9BD68D]">Demonstração guiada</div><h2 className="mt-1 font-display text-xl font-bold">Siga o pulso da decisão</h2></div><button aria-label="Fechar demonstração" data-testid="button-close-demo" onClick={onClose} className="rounded-lg p-2 text-white/70 hover:bg-white/10 hover:text-white"><X size={18} /></button></div>
-      <div className="p-6"><div className="mb-7 flex gap-1.5">{steps.map((_, index) => <div key={index} className={cn('h-1.5 flex-1 rounded-full', index <= step ? 'bg-[#62BD4D]' : 'bg-[#E3EAF1]')} />)}</div>
-        <div className="mb-5 grid h-12 w-12 place-items-center rounded-xl bg-[#E8F1F8] text-[#1E5799]"><span className="font-display text-lg font-bold">0{step + 1}</span></div>
-        <h3 className="font-display text-2xl font-bold tracking-[-.03em] text-[#172033]">{current.title}</h3><p className="mt-3 leading-7 text-[#617286]">{current.text}</p>
-        <div className="mt-7 flex items-center justify-between"><button data-testid="button-skip-demo" className="text-sm font-semibold text-[#718296] hover:text-[#123F73]" onClick={onClose}>Encerrar</button><div className="flex gap-2"><Button variant="outline" disabled={step === 0} onClick={() => setStep(s => s - 1)} data-testid="button-demo-previous"><ChevronLeft size={16} />Anterior</Button><Button onClick={() => { if (step === steps.length - 1) { onClose(); onGoOpportunity(); } else setStep(s => s + 1); }} data-testid="button-demo-next">{current.action}<ChevronRight size={16} /></Button></div></div>
+function GuidedDemo({ step, stepMeta, onNext, onPrev, onRestart, onEnd, onClose }: { step: number; stepMeta: DemoStep; onNext: () => void; onPrev: () => void; onRestart: () => void; onEnd: () => void; onClose: () => void }) {
+  const total = DEMO_STEPS.length;
+  const isLast = step === total - 1;
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(true, onClose, panelRef);
+  return <div className="fixed inset-x-0 bottom-3 z-50 flex justify-center px-3 md:bottom-5 md:px-6">
+    <div ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="guided-demo-title" className="w-full max-w-4xl overflow-hidden rounded-2xl border border-[#D8D0C1] bg-white shadow-[0_18px_50px_rgba(18,36,58,.28)]">
+      <div className="flex items-center justify-between gap-3 bg-[#123F73] px-4 py-2.5">
+        <div className="flex min-w-0 items-center gap-3"><span className="hidden h-2 w-2 shrink-0 rounded-full bg-[#62BD4D] sm:block" /><div className="min-w-0"><div className="truncate text-[10px] font-bold uppercase tracking-[.16em] text-[#9BD68D]">{stepMeta.eyebrow} · Passo {step + 1} de {total}</div><div id="guided-demo-title" className="truncate font-display text-sm font-bold text-white">{stepMeta.title}</div></div></div>
+        <div className="flex shrink-0 items-center gap-2"><button onClick={onRestart} data-testid="button-demo-restart" className="rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-white/70 hover:bg-white/10 hover:text-white"><RotateCcw size={13} className="mr-1 inline" />Reiniciar</button><button onClick={onClose} aria-label="Encerrar demonstração" data-testid="button-close-demo" className="rounded-lg p-2 text-white/70 hover:bg-white/10 hover:text-white"><X size={16} /></button></div>
       </div>
+      <div className="px-4 py-3 md:px-5">
+        <div className="mb-3 flex gap-1">{DEMO_STEPS.map((_, index) => <div key={index} className={cn('h-1 flex-1 rounded-full', index <= step ? 'bg-[#62BD4D]' : 'bg-[#E3EAF1]')} />)}</div>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"><p className="max-w-2xl whitespace-pre-line text-sm leading-6 text-[#52657A]">{stepMeta.text}</p><div className="flex shrink-0 flex-wrap items-center gap-2"><Button variant="outline" onClick={onPrev} disabled={step === 0} data-testid="button-demo-previous"><ChevronLeft size={15} />Etapa anterior</Button><Button onClick={isLast ? onEnd : onNext} data-testid="button-demo-next">{isLast ? 'Concluir demonstração' : 'Próxima etapa'}<ChevronRight size={15} /></Button></div></div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[#EDE8DC] pt-3"><span className="text-[11px] text-[#8A99A8]">Ritmo de apresentação: 2 a 3 minutos — navegue pelos passos no seu tempo.</span><button onClick={onEnd} data-testid="button-demo-end" className="text-xs font-semibold text-[#718296] hover:text-[#123F73]">Encerrar demonstração</button></div>
+      </div>
+    </div>
+  </div>;
+}
+
+function BaseInfoDialog({ open, onClose, source, info }: { open: boolean; onClose: () => void; source: BaseSource; info: { eventos: number; usuarios: number; inicio: string; fim: string } }) {
+  if (!open) return null;
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalA11y(open, onClose, dialogRef);
+  const rows: Array<[string, string]> = [
+    ['Origem da base', source.mode === 'importada' ? `Arquivo importado: ${source.file || 'CSV anônimo'}` : 'Base simulada gerada localmente'],
+    ['Quantidade de eventos', String(info.eventos)],
+    ['Quantidade de usuários', String(info.usuarios)],
+    ['Período analisado', `${info.inicio} a ${info.fim}`],
+    ['Data e horário do processamento', formatProcessedAt(source.processedAt)],
+  ];
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-[#12243a]/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="base-info-title">
+    <div ref={dialogRef} className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
+      <div className="flex items-center justify-between bg-[#123F73] px-5 py-4 text-white"><div><div className="text-[10px] font-bold uppercase tracking-[.16em] text-[#9BD68D]">Origem dos dados</div><h2 id="base-info-title" className="mt-1 font-display text-lg font-bold">{source.mode === 'importada' ? 'Base importada' : 'Base demonstrativa'}</h2></div><button onClick={onClose} aria-label="Fechar" data-testid="button-close-base-dialog" className="rounded-lg p-2 text-white/70 hover:bg-white/10 hover:text-white"><X size={16} /></button></div>
+      <div className="divide-y divide-[#EDF1F5] p-5">{rows.map(([label, value]) => <div key={label} className="flex items-center justify-between gap-4 py-3 text-sm"><span className="shrink-0 text-[#7D8D9E]">{label}</span><span className="text-right font-semibold text-[#34485D]">{value}</span></div>)}</div>
+      <div className="border-t border-[#EDE8DC] bg-[#F8FAFC] px-5 py-3 text-[11px] leading-5 text-[#849083]"><Info size={12} className="mr-1 inline" />{source.mode === 'simulada' ? 'Dados simulados para demonstração — não representam resultados reais da Petronect.' : 'Dados importados localmente a partir de um CSV anonimizado. Nenhum dado sai da máquina.'}</div>
     </div>
   </div>;
 }
@@ -163,19 +348,27 @@ function GuidedDemo({ onClose, onGoOpportunity }: { onClose: () => void; onGoOpp
 type ShellProps = {
   children: ReactNode;
   filters: Filters;
-  setFilters: React.Dispatch<React.SetStateAction<Filters>>;
   onRefresh: () => void;
   refreshing: boolean;
   metricsChange: ComputedOpportunity[];
+  dataSource: BaseSource;
+  baseInfo: { eventos: number; usuarios: number; inicio: string; fim: string };
+  demoOpen: boolean;
+  demoStep: number;
+  demoMeta: DemoStep;
+  onDemoStart: () => void;
+  onDemoNext: () => void;
+  onDemoPrev: () => void;
+  onDemoRestart: () => void;
+  onDemoEnd: () => void;
+  onDemoClose: () => void;
+  onRestoreDemo: () => void;
 };
-function Shell({ children, filters, setFilters, onRefresh, refreshing, metricsChange }: ShellProps) {
-  const [location, setLocation] = useLocation();
+function Shell({ children, filters, onRefresh, refreshing, metricsChange, dataSource, baseInfo, demoOpen, demoStep, demoMeta, onDemoStart, onDemoNext, onDemoPrev, onDemoRestart, onDemoEnd, onDemoClose, onRestoreDemo }: ShellProps) {
+  const [location] = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [guided, setGuided] = useState(false);
-  const [filterOpen, setFilterOpen] = useState(false);
-  const activeFilterCount = Object.entries(filters).filter(([key, value]) => value !== 'Todos' && value !== 'Todas' && !(key === 'period' && value === '30 dias')).length;
-  const clearFilters = () => setFilters({ period: '30 dias', userType: 'Todos', page: 'Todas', segment: 'Todos', priority: 'Todas', oppStatus: 'Todas' });
+  const [baseInfoOpen, setBaseInfoOpen] = useState(false);
   const currentLabel = [...navItems, ...supportItems].find(item => item.href === location)?.label ?? 'Visão geral';
   const sidebar = <aside className={cn('sidebar-grid fixed inset-y-0 left-0 z-40 flex w-[252px] flex-col bg-[#123F73] transition-all duration-300 lg:relative lg:z-auto', collapsed && 'lg:w-[78px]', mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0')}>
     <div className={cn('flex h-[78px] items-center border-b border-white/10 px-5', collapsed && 'lg:justify-center lg:px-0')}><Logo compact={collapsed} /><button onClick={() => setMobileOpen(false)} className="ml-auto rounded-lg p-2 text-white/60 hover:bg-white/10 lg:hidden" aria-label="Fechar menu" data-testid="button-close-sidebar"><X size={18} /></button></div>
@@ -183,16 +376,15 @@ function Shell({ children, filters, setFilters, onRefresh, refreshing, metricsCh
       <nav className="space-y-1">{navItems.map(item => <Link key={item.href} href={item.href} onClick={() => setMobileOpen(false)} data-testid={`link-nav-${item.href === '/' ? 'overview' : item.href.slice(1)}`} className={cn('group flex h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold text-white/67 transition-colors hover:bg-white/10 hover:text-white', location === item.href && 'bg-white/13 text-white shadow-inner', collapsed && 'lg:justify-center lg:px-0')}><Icon name={item.icon} size={18} /><span className={cn(collapsed && 'lg:hidden')}>{item.label}</span>{item.href === '/oportunidades' && <span className={cn('ml-auto grid h-5 min-w-5 place-items-center rounded-full bg-[#FF6654] px-1 text-[10px] text-white', collapsed && 'lg:hidden')}>{metricsChange.length}</span>}</Link>)}</nav>
       <div className={cn('mb-3 mt-8 px-3 text-[10px] font-bold uppercase tracking-[.18em] text-white/40', collapsed && 'lg:text-center lg:text-[0px]')}>Conheça</div>
       <nav className="space-y-1">{supportItems.map(item => <Link key={item.href} href={item.href} onClick={() => setMobileOpen(false)} data-testid={`link-nav-${item.href.slice(1)}`} className={cn('group flex h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold text-white/67 transition-colors hover:bg-white/10 hover:text-white', location === item.href && 'bg-white/13 text-white', collapsed && 'lg:justify-center lg:px-0')}><Icon name={item.icon} size={18} /><span className={cn(collapsed && 'lg:hidden')}>{item.label}</span></Link>)}</nav>
-      <div className={cn('mt-8 rounded-xl border border-white/10 bg-white/5 p-3', collapsed && 'lg:hidden')}><div className="mb-2 flex items-center gap-2 text-xs font-semibold text-white/75"><span className="h-2 w-2 rounded-full bg-[#62BD4D]" />Dados simulados</div><p className="text-[11px] leading-5 text-white/45">Base local · não há envio de dados</p></div>
+      <div className={cn('mt-8 rounded-xl border border-white/10 bg-white/5 p-3', collapsed && 'lg:hidden')}><div className="mb-2 flex items-center gap-2 text-xs font-semibold text-white/75">{dataSource.mode === 'importada' ? <Database size={14} className="text-[#9BD68D]" /> : <span className="h-2 w-2 rounded-full bg-[#62BD4D]" />}{dataSource.mode === 'importada' ? 'Base importada' : 'Base demonstrativa'}</div><p className="text-[11px] leading-5 text-white/45">Processamento local · sem envio de dados</p></div>
     </div>
     <div className={cn('border-t border-white/10 p-3', collapsed && 'lg:px-2')}><button onClick={() => setCollapsed(value => !value)} data-testid="button-collapse-sidebar" className="flex w-full items-center justify-center gap-2 rounded-lg p-2 text-xs font-semibold text-white/55 hover:bg-white/10 hover:text-white">{collapsed ? <ChevronRight size={16} /> : <><ChevronLeft size={16} /><span>Recolher menu</span></>}</button></div>
   </aside>;
   return <div className="pulso-shell flex min-h-[100dvh] text-[#172033]">{sidebar}<main className="min-w-0 flex-1">
     <header className="sticky top-0 z-30 border-b border-[#DFE6EE]/90 bg-[#F5F7FA]/90 backdrop-blur-md"><div className="flex min-h-[78px] flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 md:px-7"><div className="flex min-w-0 items-center gap-3"><button onClick={() => setMobileOpen(true)} className="shrink-0 rounded-lg p-2 text-[#123F73] hover:bg-[#E8EFF6] lg:hidden" aria-label="Abrir menu" data-testid="button-open-sidebar"><Menu size={20} /></button><div className="hidden min-w-0 truncate text-sm text-[#75869A] sm:block">PULSO <span className="mx-2 shrink-0 text-[#B6C2CF]">/</span> <span className="truncate font-semibold text-[#172033]">{currentLabel}</span></div></div>
-    <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 md:gap-3"><div className="hidden shrink-0 items-center gap-2 rounded-lg border border-[#DBE4EC] bg-white px-3 py-2 text-xs text-[#607286] sm:flex"><span className="h-2 w-2 rounded-full bg-[#62BD4D]" />{filters.period}<ChevronDown size={14} /></div><button onClick={() => setFilterOpen(value => !value)} className={cn('relative hidden shrink-0 rounded-lg p-2 text-[#64778B] hover:bg-[#E8EFF6] md:block', filterOpen && 'bg-[#E8EFF6] text-[#123F73]')} aria-label="Abrir painel de filtros" aria-expanded={filterOpen} data-testid="button-header-filters"><Filter size={18} />{activeFilterCount > 0 && <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[#FF6654] px-1 text-[9px] font-bold text-white">{activeFilterCount}</span>}</button><Button variant="outline" className="hidden shrink-0 sm:inline-flex" onClick={onRefresh} data-testid="button-refresh-analysis"><RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />{refreshing ? 'Atualizando' : 'Atualizar análise'}</Button><button onClick={() => setGuided(true)} data-testid="button-start-demo" className="hidden shrink-0 items-center gap-2 rounded-lg bg-[#EAF5E7] px-3 py-2 text-xs font-bold text-[#347629] hover:bg-[#DCEFD7] md:flex"><Play size={14} fill="currentColor" />Demonstração guiada</button><div className="flex min-w-0 shrink-0 items-center gap-2 border-l border-[#DDE5ED] pl-3"><div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#DCE8F3] text-xs font-bold text-[#1E5799]">AP</div><div className="hidden leading-tight xl:block"><div className="max-w-[180px] truncate text-xs font-bold text-[#172033]">Analista Petronect</div><div className="text-[10px] text-[#7B8B9B]">Equipe 10</div></div></div></div></div></header>
-      {filterOpen && <div className="fixed right-4 top-[84px] z-40 w-[min(92vw,360px)] rounded-2xl border border-[#DCE5ED] bg-white p-5 shadow-2xl" data-testid="panel-header-filters"><div className="mb-4 flex items-center justify-between"><h2 className="font-display text-lg font-bold">Filtros da análise</h2><button onClick={() => setFilterOpen(false)} aria-label="Fechar filtros"><X size={17} /></button></div><div className="grid gap-3"><label className="text-xs font-bold text-[#52657A]">Período<select value={filters.period} onChange={event => setFilters(f => ({ ...f, period: event.target.value }))} className="mt-1 h-9 w-full rounded-lg border border-[#D7E0EA] bg-white px-2 text-sm font-normal"><option>7 dias</option><option>14 dias</option><option>30 dias</option></select></label><label className="text-xs font-bold text-[#52657A]">Tipo de usuário<select value={filters.userType} onChange={event => setFilters(f => ({ ...f, userType: event.target.value }))} className="mt-1 h-9 w-full rounded-lg border border-[#D7E0EA] bg-white px-2 text-sm font-normal"><option>Todos</option>{['Novo', 'Explorador', 'Interessado', 'Recorrente', 'Com dificuldade', 'Em risco de abandono', 'Reengajado'].map(item => <option key={item}>{item}</option>)}</select></label><label className="text-xs font-bold text-[#52657A]">Página<select value={filters.page} onChange={event => setFilters(f => ({ ...f, page: event.target.value }))} className="mt-1 h-9 w-full rounded-lg border border-[#D7E0EA] bg-white px-2 text-sm font-normal"><option>Todas</option>{['Página inicial', 'Oportunidades', 'Documentação', 'Fornecedores', 'Suporte', 'Notícias'].map(item => <option key={item}>{item}</option>)}</select></label><label className="text-xs font-bold text-[#52657A]">Segmento<select value={filters.segment} onChange={event => setFilters(f => ({ ...f, segment: event.target.value }))} className="mt-1 h-9 w-full rounded-lg border border-[#D7E0EA] bg-white px-2 text-sm font-normal"><option>Todos</option>{['Novo', 'Explorador', 'Interessado', 'Recorrente', 'Com dificuldade', 'Em risco de abandono', 'Reengajado'].map(item => <option key={item}>{item}</option>)}</select></label><label className="text-xs font-bold text-[#52657A]">Prioridade<select value={filters.priority} onChange={event => setFilters(f => ({ ...f, priority: event.target.value }))} className="mt-1 h-9 w-full rounded-lg border border-[#D7E0EA] bg-white px-2 text-sm font-normal"><option>Todas</option><option>Alta</option><option>Média</option><option>Baixa</option></select></label><label className="text-xs font-bold text-[#52657A]">Status<select value={filters.oppStatus} onChange={event => setFilters(f => ({ ...f, oppStatus: event.target.value }))} className="mt-1 h-9 w-full rounded-lg border border-[#D7E0EA] bg-white px-2 text-sm font-normal"><option>Todas</option><option>Nova</option><option>Em análise</option></select></label></div><button onClick={() => { clearFilters(); setFilterOpen(false); }} className="mt-4 w-full rounded-lg border border-[#D7E0EA] px-3 py-2 text-sm font-bold text-[#1E5799] hover:bg-[#F3F7FB]" data-testid="button-clear-filters">Limpar filtros</button></div>}
+     <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 md:gap-3"><div className="hidden shrink-0 items-center gap-2 rounded-lg border border-[#DBE4EC] bg-white px-3 py-2 text-xs text-[#607286] sm:flex"><span className="h-2 w-2 rounded-full bg-[#62BD4D]" />{filters.period}<ChevronDown size={14} /></div><button onClick={() => setBaseInfoOpen(true)} data-testid="button-open-base-info" title="Ver origem da base" className="flex shrink-0 items-center gap-2 rounded-lg border border-[#DBE4EC] bg-white px-3 py-2 text-xs font-bold text-[#52675C] hover:border-[#B9C6D2]">{dataSource.mode === 'importada' ? <Database size={14} className="text-[#2f7298]" /> : <Database size={14} className="text-[#47785c]" />}{dataSource.mode === 'importada' ? 'Base importada' : 'Base demonstrativa'}<ChevronDown size={14} /></button><button onClick={() => setMobileOpen(true)} className="hidden shrink-0 rounded-lg p-2 text-[#64778B] hover:bg-[#E8EFF6] md:block" aria-label="Filtros" data-testid="button-header-filters"><Filter size={18} /></button><Button variant="outline" className="hidden shrink-0 sm:inline-flex" onClick={onRefresh} data-testid="button-refresh-analysis"><RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />{refreshing ? 'Atualizando' : 'Atualizar análise'}</Button><button onClick={onDemoStart} data-testid="button-start-demo" className="hidden shrink-0 items-center gap-2 rounded-lg bg-[#EAF5E7] px-3 py-2 text-xs font-bold text-[#347629] hover:bg-[#DCEFD7] md:flex"><Play size={14} fill="currentColor" />Demonstração guiada</button><div className="hidden shrink-0 lg:block"><Button variant="ghost" onClick={onRestoreDemo} data-testid="button-restore-demo" title="Restaurar demonstração"><RotateCcw size={14} />Restaurar demonstração</Button></div><div className="flex min-w-0 shrink-0 items-center gap-2 border-l border-[#DDE5ED] pl-3"><div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#DCE8F3] text-xs font-bold text-[#1E5799]">AP</div><div className="hidden leading-tight xl:block"><div className="max-w-[180px] truncate text-xs font-bold text-[#172033]">Analista Petronect</div><div className="text-[10px] text-[#7B8B9B]">Equipe 10</div></div></div></div></div></header>
     <div className="mx-auto max-w-[1540px] p-4 md:p-7">{children}</div>
-   </main>{mobileOpen && <button aria-label="Fechar menu" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-30 bg-[#12243a]/35 lg:hidden" />}{guided && <GuidedDemo onClose={() => setGuided(false)} onGoOpportunity={() => { setLocation('/comunicacao'); }} />}</div>;
+   </main>{mobileOpen && <button aria-label="Fechar menu" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-30 bg-[#12243a]/35 lg:hidden" />}<BaseInfoDialog open={baseInfoOpen} onClose={() => setBaseInfoOpen(false)} source={dataSource} info={baseInfo} />{demoOpen && <GuidedDemo step={demoStep} stepMeta={demoMeta} onNext={onDemoNext} onPrev={onDemoPrev} onRestart={onDemoRestart} onEnd={onDemoEnd} onClose={onDemoClose} />}</div>;
 }
 
 function MetricCard({ label, value, change, detail, icon, accent }: { label: string; value: string; change: number; detail: string; icon: string; accent: string }) {
@@ -220,17 +412,19 @@ function Overview({ filters, setFilters, computed }: { filters: Filters; setFilt
     { label: 'Possível dificuldade', value: String(metrics.difficultyCount), change: metrics.changeDifficulty, detail: 'usuários para observar', icon: 'triangle', accent: 'coral' },
     { label: 'Oportunidades', value: String(metrics.opportunitiesCount), change: metrics.changeOpportunities, detail: 'sinais priorizados', icon: 'sparkles', accent: 'green' },
   ];
-  return <><PageHeader title="Visão geral executiva" description="Uma leitura rápida dos comportamentos que movem o ecossistema Petronect." actions={<><select value={filters.period} onChange={e => setFilters(f => ({ ...f, period: e.target.value }))} data-testid="select-period-overview" className="h-9 rounded-lg border border-[#D7E0EA] bg-white px-3 text-sm font-semibold text-[#52657A] outline-none"><option>30 dias</option><option>14 dias</option><option>7 dias</option></select><Button variant="soft" onClick={() => downloadSummary(metricCards)} data-testid="button-export-overview"><Download size={15} />Exportar resumo</Button></>} />
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">{metricCards.map(item => <MetricCard key={item.label} {...item} />)}</div>
+  return <><PageHeader title="Visão geral executiva" description="Uma leitura rápida dos comportamentos que movem o ecossistema Petronect." actions={<><select value={filters.period} onChange={e => setFilters(f => ({ ...f, period: e.target.value }))} data-testid="select-period-overview" className="h-9 rounded-lg border border-[#D7E0EA] bg-white px-3 text-sm font-semibold text-[#52657A] outline-none"><option>30 dias</option><option>14 dias</option><option>7 dias</option></select><select value={filters.userType} onChange={e => setFilters(f => ({ ...f, userType: e.target.value }))} data-testid="select-user-type-overview" className="h-9 rounded-lg border border-[#D7E0EA] bg-white px-3 text-sm font-semibold text-[#52657A] outline-none"><option>Todos</option><option>Novo</option><option>Explorador</option><option>Interessado</option><option>Recorrente</option><option>Com dificuldade</option><option>Em risco de abandono</option><option>Reengajado</option></select><Button variant="soft" onClick={() => downloadSummary(metricCards)} data-testid="button-export-overview"><Download size={15} />Exportar resumo</Button></>} />
+    <Card className="overflow-hidden"><div className="flex flex-col gap-5 p-5 md:p-6 lg:flex-row lg:items-center lg:justify-between"><div className="min-w-0"><div className="mb-3 inline-flex items-center gap-2 rounded-full bg-[#E7F5E4] px-3 py-1 text-[10px] font-bold uppercase tracking-[.16em] text-[#347629]"><Sparkles size={12} />Proposta de valor</div><h2 className="font-display text-[26px] font-bold leading-[1.15] tracking-[-.03em] text-[#172033] md:text-[30px]">Hoje, a Petronect enxerga cliques.<br className="hidden md:block" /> <span className="text-[#2f7298]">Com o PULSO, ela entende comportamentos e sabe qual decisão tomar.</span></h2><p className="mt-3 max-w-2xl text-sm leading-6 text-[#52675C]">O PULSO transforma registros de navegação em evidências, identifica possíveis barreiras e oportunidades e recomenda a próxima ação de comunicação.</p></div><div className="grid shrink-0 gap-1.5 sm:grid-cols-3 lg:max-w-[340px] lg:grid-cols-2"><div className="flex flex-wrap items-center gap-1.5"><Badge color="green">Comportamento</Badge><MoveRight size={13} className="text-[#B6C3CF]" /><Badge color="green">Evidência</Badge><MoveRight size={13} className="text-[#B6C3CF]" /><Badge color="amber">Hipótese</Badge></div><div className="flex flex-wrap items-center gap-1.5"><Badge color="amber">Prioridade</Badge><MoveRight size={13} className="text-[#B6C3CF]" /><Badge color="blue">Recomendação</Badge><MoveRight size={13} className="text-[#B6C3CF]" /><Badge color="blue">Comunicação</Badge></div></div></div></Card>
+    <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">{metricCards.map(item => <MetricCard key={item.label} {...item} />)}</div>
     <div className="mt-5 grid gap-5 xl:grid-cols-[1.65fr_1fr]"><Card className="p-5"><div className="mb-5 flex items-start justify-between"><div><h2 className="font-display text-base font-bold text-[#172033]">Acessos ao longo do período</h2><p className="mt-1 text-xs text-[#8391A0]">Sessões e usuários únicos por dia</p></div><div className="flex gap-4 text-xs font-semibold text-[#6E7E8F]"><span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-[#1E5799]" />Acessos</span><span className="flex items-center gap-1.5"><i className="h-2 w-2 rounded-full bg-[#62BD4D]" />Únicos</span></div></div><div className="h-[270px]"><ResponsiveContainer width="100%" height="100%"><RechartsLineChart data={accessTrend} margin={{ top: 8, right: 4, left: -25, bottom: 0 }}><CartesianGrid stroke="#EDF1F5" vertical={false} /><XAxis dataKey="day" tick={{ fontSize: 10, fill: '#8291A1' }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10, fill: '#8291A1' }} axisLine={false} tickLine={false} /><Tooltip contentStyle={{ border: '1px solid #DFE7EF', borderRadius: 10, fontSize: 12 }} /><Line type="monotone" dataKey="acessos" stroke="#1E5799" strokeWidth={2.5} dot={false} /><Line type="monotone" dataKey="unicos" stroke="#62BD4D" strokeWidth={2.5} dot={false} /></RechartsLineChart></ResponsiveContainer></div></Card>
       <Card className="p-5"><div className="mb-5"><h2 className="font-display text-base font-bold text-[#172033]">Principais páginas</h2><p className="mt-1 text-xs text-[#8391A0]">Onde a atenção está concentrada</p></div><div className="space-y-4">{rankingData.slice(0, 5).map((item, index) => <div key={item.pagina} data-testid={`row-page-ranking-${index}`}><div className="mb-1.5 flex items-center justify-between text-xs"><span className="font-semibold text-[#52657A]">{item.pagina}</span><span className="font-bold text-[#172033] tabular-nums">{item.acessos}</span></div><div className="h-2 overflow-hidden rounded-full bg-[#EEF2F6]"><div className="h-full rounded-full bg-[#1E5799]" style={{ width: `${item.share}%` }} /></div></div>)}</div><Link href="/jornada" className="mt-5 inline-flex items-center gap-1 text-xs font-bold text-[#1E5799] hover:text-[#123F73]" data-testid="link-view-journey">Ver jornada completa <ChevronRight size={14} /></Link></Card></div>
     <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_1fr_1.15fr]"><Card className="p-5"><div className="mb-4"><h2 className="font-display text-base font-bold">Acessos por horário</h2><p className="mt-1 text-xs text-[#8391A0]">Pico de atividade ao longo do dia</p></div><div className="h-[190px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={hourlyData} margin={{ left: -28, right: 4, bottom: 0 }}><CartesianGrid stroke="#EDF1F5" vertical={false} /><XAxis dataKey="hora" tick={{ fontSize: 10, fill: '#8291A1' }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10, fill: '#8291A1' }} axisLine={false} tickLine={false} /><Tooltip contentStyle={{ border: '1px solid #DFE7EF', borderRadius: 10, fontSize: 12 }} /><Bar dataKey="acessos" fill="#4B87C5" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div></Card>
       <Card className="p-5"><div className="mb-4"><h2 className="font-display text-base font-bold">Distribuição de segmentos</h2><p className="mt-1 text-xs text-[#8391A0]">{allSegments.reduce((s, seg) => s + seg.count, 0)} usuários classificados</p></div><div className="flex items-center gap-5"><div className="h-[170px] w-[170px]"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={allSegments.filter(s => s.count > 0)} dataKey="count" nameKey="key" innerRadius={53} outerRadius={78} paddingAngle={3}><LabelList dataKey="percentage" position="outside" /><>{allSegments.filter(s => s.count > 0).map(item => <Cell key={item.key} fill={item.color} />)}</></Pie><Tooltip formatter={(value, name) => [`${value} usuários`, name]} contentStyle={{ border: '1px solid #DFE7EF', borderRadius: 10, fontSize: 12 }} /></PieChart></ResponsiveContainer></div><div className="min-w-0 flex-1 space-y-2">{allSegments.filter(s => s.count > 0).slice(0, 4).map(item => <div key={item.key} className="flex items-center justify-between gap-2 text-xs"><span className="flex min-w-0 items-center gap-2 text-[#52657A]"><i className="h-2 w-2 shrink-0 rounded-full" style={{ background: item.color }} /><span className="truncate">{item.key}</span></span><b className="text-[#172033]">{item.percentage.toFixed(1).replace('.', ',')}%</b></div>)}</div></div></Card>
       <Card className="p-5"><div className="mb-4"><h2 className="font-display text-base font-bold">Principais descobertas</h2><p className="mt-1 text-xs text-[#8391A0]">Sinais para orientar a próxima ação</p></div><div className="space-y-3">{allOpportunities.map((item, index) => <Link href="/oportunidades" key={item.id} data-testid={`card-discovery-${item.id}`} className="group block rounded-xl border border-[#E6ECF2] p-3 transition-colors hover:border-[#BBD0E4] hover:bg-[#F7FAFC]"><div className="flex items-start gap-2"><span className={cn('mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-md', index === 1 ? 'bg-[#FFF0EE] text-[#C94C40]' : 'bg-[#E7F5E4] text-[#347629]')}><Lightbulb size={13} /></span><div className="min-w-0"><div className="truncate text-xs font-bold text-[#34485D]">{item.title}</div><div className="mt-1 flex items-center gap-2 text-[10px] text-[#8796A5]"><span>{item.confidence}% confiança</span><span>·</span><span className="text-[#1E5799]">{item.impact}</span></div></div><ChevronRight size={15} className="ml-auto text-[#AEBCC8] transition-transform group-hover:translate-x-0.5" /></div></Link>)}</div></Card></div>
+    <div className="mt-5"><Card className="p-5 md:p-6"><div className="mb-5 flex flex-wrap items-center justify-between gap-2"><div><div className="mb-2 inline-flex items-center gap-2 rounded-full bg-[#E7EFF8] px-3 py-1 text-[10px] font-bold uppercase tracking-[.16em] text-[#2f7298]"><Gauge size={12} />Indicadores futuros</div><h2 className="font-display text-2xl font-bold tracking-[-.03em] text-[#172033]">Impacto que poderá ser acompanhado</h2><p className="mt-1 text-xs text-[#8391A0]">Metas, estimativas, projeções e impacto potencial — sem afirmar resultados alcançados.</p></div><Badge color="amber">Validação em projeto-piloto</Badge></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{IMPACT_INDICATORS.map(ind => <div key={ind.label} className="rounded-xl border border-[#E6ECF2] p-4"><div className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-xs font-bold text-[#34485D]"><TrendingUp size={14} className="text-[#2f7298]" />{ind.label}</span><span className="shrink-0 rounded-full bg-[#F2F7FB] px-2 py-0.5 text-[10px] font-bold text-[#2f7298]">{ind.kind}</span></div><p className="mt-2 text-[11px] leading-5 text-[#718296]">{ind.text}</p></div>)}</div><div className="mt-4 flex items-start gap-2 rounded-xl bg-[#FFF4DF] p-3 text-[12px] leading-5 text-[#956A1B]"><Info size={14} className="mt-0.5 shrink-0" /><span>Como este é um protótipo demonstrativo, os impactos deverão ser validados em um projeto-piloto com dados e usuários reais. Nenhum valor acima representa resultado alcançado — são indicadores a serem acompanhados.</span></div></Card></div>
   </>;
 }
 
-function LegacyJourney() {
+function Journey() {
   const [selected, setSelected] = useState('USR-024');
   const stages = [{ label: 'Entrada', count: 500, color: '#1E5799' }, { label: 'Página inicial', count: 438, color: '#4381B9' }, { label: 'Oportunidade', count: 316, color: '#62BD4D' }, { label: 'Documentação', count: 204, color: '#8BCF7B' }, { label: 'Próxima ação', count: 127, color: '#D89A3C' }];
   return <><PageHeader title="Jornada dos usuários" description="Entenda como os usuários atravessam o ecossistema, do primeiro clique à próxima ação." actions={<Button variant="soft" data-testid="button-journey-filter"><ListFilter size={15} />Filtrar jornada</Button>} />
@@ -240,28 +434,7 @@ function LegacyJourney() {
   </>;
 }
 
-function Journey({ computed }: { computed: ReturnType<typeof computeAll> }) {
-  const userIds = Array.from(new Set(computed.filtered.map(event => event.user_id)));
-  const stages = [
-    { label: 'Entrada', match: () => true, color: '#1E5799' },
-    { label: 'Página inicial', match: (events: AccessEvent[]) => events.some(event => event.page === '/'), color: '#4381B9' },
-    { label: 'Oportunidade', match: (events: AccessEvent[]) => events.some(event => event.page === '/oportunidades'), color: '#62BD4D' },
-    { label: 'Documentação', match: (events: AccessEvent[]) => events.some(event => event.page === '/documentacao'), color: '#8BCF7B' },
-    { label: 'Próxima ação', match: (events: AccessEvent[]) => events.some(event => event.completed_action), color: '#D89A3C' },
-  ].map(stage => ({ ...stage, count: userIds.filter(userId => stage.match(computed.filtered.filter(event => event.user_id === userId))).length }));
-  const sessions = Array.from(computed.filtered.reduce((map, event) => map.set(event.session_id, [...(map.get(event.session_id) || []), event]), new Map<string, AccessEvent[]>()).entries()).sort(([, first], [, second]) => second[second.length - 1].timestamp.localeCompare(first[first.length - 1].timestamp));
-  const [selectedSessionId, setSelectedSessionId] = useState(sessions[0]?.[0] || '');
-  const selectedEvents = sessions.find(([sessionId]) => sessionId === selectedSessionId)?.[1] || sessions[0]?.[1] || [];
-  useEffect(() => { if (!sessions.some(([sessionId]) => sessionId === selectedSessionId)) setSelectedSessionId(sessions[0]?.[0] || ''); }, [sessions, selectedSessionId]);
-  const formatTime = (timestamp: string) => timestamp.slice(11, 16);
-  return <><PageHeader title="Jornada dos usuários" description="Entenda como os usuários atravessam o ecossistema, do primeiro clique à próxima ação." actions={<Badge color="green">{stages[0].count > 0 ? ((stages[4].count / stages[0].count) * 100).toFixed(1).replace('.', ',') : '0'}% chegam à ação</Badge>} />
-    <div className="grid gap-5 xl:grid-cols-[1fr_340px]"><div className="space-y-5"><Card className="p-5"><div className="mb-6"><h2 className="font-display text-base font-bold">Fluxo de navegação</h2><p className="mt-1 text-xs text-[#8391A0]">Conversão por etapa no período filtrado</p></div><div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-1">{stages.map((stage, index) => <div key={stage.label} className="flex min-w-0 flex-1 items-center gap-2"><div className="min-w-0 flex-1 rounded-xl border border-[#E1E8EF] bg-[#FBFCFD] p-3" data-testid={`stage-journey-${index}`}><div className="flex items-center justify-between gap-2"><span className="truncate text-xs font-bold text-[#52657A]">{stage.label}</span><span className="font-display text-lg font-bold text-[#172033]">{stage.count}</span></div><div className="mt-2 h-1.5 rounded-full bg-[#E9EEF3]"><div className="h-full rounded-full" style={{ backgroundColor: stage.color, width: `${stages[0].count ? (stage.count / stages[0].count) * 100 : 0}%` }} /></div><div className="mt-1 text-[10px] text-[#8B9AA8]">{stages[0].count ? ((stage.count / stages[0].count) * 100).toFixed(1).replace('.', ',') : '0'}% da entrada</div></div>{index < stages.length - 1 && <ChevronRight className="hidden shrink-0 text-[#B9C5D0] md:block" size={18} />}</div>)}</div></Card>
-      <Card className="p-5"><div className="mb-4 flex items-center justify-between"><div><h2 className="font-display text-base font-bold">Sessões recentes</h2><p className="mt-1 text-xs text-[#8391A0]">Clique para exibir a linha do tempo</p></div><Search size={17} className="text-[#8C9BAB]" /></div>{sessions.length === 0 ? <p className="py-6 text-sm text-[#8796A5]">Nenhuma sessão encontrada com os filtros atuais.</p> : <div className="divide-y divide-[#EDF1F5]">{sessions.slice(0, 8).map(([sessionId, sessionEvents]) => { const user = sessionEvents[0].user_id; return <button key={sessionId} onClick={() => setSelectedSessionId(sessionId)} data-testid={`button-session-${sessionId}`} className={cn('flex w-full items-center gap-3 py-3 text-left transition-colors', selectedSessionId === sessionId && 'rounded-lg bg-[#F2F7FB] px-2')}><div className="grid h-8 w-8 place-items-center rounded-full bg-[#E6EEF7] text-[10px] font-bold text-[#1E5799]">{user.slice(-3)}</div><div className="min-w-0 flex-1"><div className="text-xs font-bold text-[#34485D]">{user}</div><div className="mt-1 truncate text-[10px] text-[#8796A5]">{sessionEvents.length} eventos · {sessionEvents[0].page}</div></div><div className="text-right"><div className="text-[10px] font-semibold text-[#52657A]">{formatTime(sessionEvents[0].timestamp)}</div><div className="mt-1 text-[10px] text-[#95A2AF]">{sessionId}</div></div></button>; })}</div>}</Card></div>
-      <Card className="h-fit overflow-hidden"><div className="border-b border-[#E5EBF1] bg-[#F8FAFC] p-5"><div className="text-[10px] font-bold uppercase tracking-[.16em] text-[#1E5799]">Linha do tempo</div><h2 className="mt-1 font-display text-lg font-bold">{selectedEvents[0]?.user_id || 'Nenhuma sessão'}</h2><p className="mt-1 text-xs text-[#8391A0]">{selectedSessionId || 'Selecione uma sessão'}</p></div><div className="p-5">{selectedEvents.length === 0 ? <p className="text-sm text-[#8796A5]">A linha do tempo aparecerá quando houver dados.</p> : <div className="relative ml-2 border-l border-[#D9E3EC] pl-6">{selectedEvents.map((event, index) => <div key={`${event.timestamp}-${index}`} className="relative pb-6 last:pb-0"><span className={cn('absolute -left-[31px] top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white', event.completed_action ? 'bg-[#62BD4D]' : 'bg-[#1E5799]')} /><div className="text-[10px] font-bold text-[#1E5799]">{formatTime(event.timestamp)}</div><div className="mt-1 text-xs font-bold text-[#34485D]">{event.page === '/' ? 'Página inicial' : event.page.replace('/', '')}</div><div className="mt-1 text-[11px] leading-5 text-[#8796A5]">{event.event_type}{event.completed_action ? ' · ação concluída' : ''}</div></div>)}</div>}</div></Card></div>
-  </>;
-}
-
-function Segments({ computed, filters }: { computed: ReturnType<typeof computeAll>; filters: Filters }) {
+function Segments({ computed }: { computed: ReturnType<typeof computeAll> }) {
   const [filter, setFilter] = useState('Todos');
   const list = filter === 'Todos' ? computed.segments : computed.segments.filter(item => item.priority === filter);
   return <><PageHeader title="Segmentos comportamentais" description="Agrupamentos acionáveis a partir de padrões de navegação, sem identificação pessoal." actions={<div className="flex rounded-lg border border-[#D7E0EA] bg-white p-1">{['Todos', 'Alta', 'Média', 'Baixa'].map(item => <button key={item} onClick={() => setFilter(item)} data-testid={`button-segment-filter-${item.toLowerCase()}`} className={cn('rounded-md px-3 py-1.5 text-xs font-bold', filter === item ? 'bg-[#123F73] text-white' : 'text-[#718296] hover:bg-[#F0F4F8]')}>{item}</button>)}</div>} />
@@ -270,17 +443,31 @@ function Segments({ computed, filters }: { computed: ReturnType<typeof computeAl
   </>;
 }
 
-function Opportunities({ computed, filters, setFilters }: { computed: ReturnType<typeof computeAll>; filters: Filters; setFilters: React.Dispatch<React.SetStateAction<Filters>> }) {
+function Opportunities({ computed, filters, setFilters, demoTarget }: { computed: ReturnType<typeof computeAll>; filters: Filters; setFilters: React.Dispatch<React.SetStateAction<Filters>>; demoTarget: DemoTarget | null }) {
   const [selectedId, setSelectedId] = useState<string>(computed.opportunities[0]?.id || 'opp-01');
   const opportunities = computed.opportunities;
   const selected = opportunities.find(item => item.id === selectedId) ?? opportunities[0];
+  useEffect(() => { if (demoTarget?.opportunityId) setSelectedId(demoTarget.opportunityId); }, [demoTarget?.opportunityId]);
   return <><PageHeader title="Central de oportunidades" description="Sinais explicáveis que conectam comportamento observado a uma decisão possível." actions={<><select value={filters.oppStatus} onChange={e => setFilters(f => ({ ...f, oppStatus: e.target.value }))} data-testid="select-opportunity-status" className="h-9 rounded-lg border border-[#D7E0EA] bg-white px-3 text-xs font-bold text-[#52657A] outline-none"><option>Todas</option><option>Nova</option><option>Em análise</option></select></>} />
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_400px]"><div className="space-y-3">{opportunities.map(item => <button key={item.id} onClick={() => setSelectedId(item.id)} data-testid={`card-opportunity-${item.id}`} className={cn('w-full rounded-2xl border bg-white p-5 text-left shadow-[0_8px_28px_rgba(27,55,85,.045)] transition-all hover:border-[#B9CFE3]', selectedId === item.id ? 'border-[#1E5799] ring-2 ring-[#1E5799]/10' : 'border-[#E0E7EF]')}><div className="flex items-start justify-between gap-3"><div className="flex items-start gap-3"><div className={cn('grid h-10 w-10 shrink-0 place-items-center rounded-xl', item.severity === 'Alta' ? 'bg-[#FFF0EE] text-[#C94C40]' : 'bg-[#FFF4DF] text-[#956A1B]')}><Lightbulb size={19} /></div><div><h2 className="font-display text-base font-bold text-[#172033]">{item.title}</h2><div className="mt-2 flex flex-wrap items-center gap-2"><Badge color={item.severity === 'Alta' ? 'coral' : 'amber'}>{item.severity} prioridade</Badge><span className="text-[11px] text-[#8695A4]">Segmento: <b className="text-[#52657A]">{item.segment}</b></span></div></div></div><ChevronRight size={18} className={cn('mt-1 text-[#AAB8C5]', selectedId === item.id && 'text-[#1E5799]')} /></div><p className="mt-4 text-sm leading-6 text-[#687B8E]">{item.summary}</p><div className="mt-4 flex items-center gap-5 border-t border-[#EEF2F5] pt-3 text-[11px] text-[#8695A4]"><span className="flex items-center gap-1.5"><Target size={14} className="text-[#1E5799]" />{item.confidence}% confiança</span><span className="flex items-center gap-1.5"><Activity size={14} className="text-[#62BD4D]" />Impacto em {item.impact.toLowerCase()}</span><Badge color="slate">{item.status}</Badge></div></button>)}</div>
-      {selected && <Card className="h-fit overflow-hidden"><div className="border-b border-[#E5EBF1] bg-[#FAFBFC] p-5"><div className="flex items-center justify-between"><Badge color="blue">Evidências</Badge><button data-testid="button-more-opportunity" className="rounded-md p-1.5 text-[#7E8E9D] hover:bg-[#E9EFF5]"><MoreHorizontal size={17} /></button></div><h2 className="mt-4 font-display text-xl font-bold tracking-[-.03em] text-[#172033]">{selected.title}</h2><p className="mt-2 text-xs leading-5 text-[#718296]">{selected.summary}</p></div><div className="p-5"><div className="mb-2 text-[10px] font-bold uppercase tracking-[.16em] text-[#8493A2]">Sinais observados</div><div className="space-y-3">{selected.evidence.map((evidence, index) => <div key={index} className="flex gap-3 rounded-lg bg-[#F7F9FB] p-3"><span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[#E4F2E0] text-[10px] font-bold text-[#347629]">{index + 1}</span><span className="text-xs leading-5 text-[#52657A]">{evidence}</span></div>)}</div><div className="mt-6 rounded-xl border border-[#CBE0F1] bg-[#F2F7FB] p-4"><div className="flex items-center gap-2 text-xs font-bold text-[#1E5799]"><Sparkles size={15} />Recomendação</div><p className="mt-2 text-xs leading-5 text-[#52657A]">{selected.recommendation}</p></div><Link href="/comunicacao" data-testid="link-create-from-opportunity" className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#123F73] text-sm font-bold text-white hover:bg-[#1E5799]"><MessageSquareText size={16} />Criar comunicação para este segmento</Link><div className="mt-3 flex items-start gap-2 text-[10px] leading-4 text-[#8A99A8]"><Info size={13} className="mt-0.5 shrink-0 text-[#1E5799]" />Esta sugestão é uma hipótese de ação. Revise o contexto antes de ativar.</div></div></Card>}</div>
+    <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl border border-[#E0E7EF] bg-white p-3 shadow-[0_8px_28px_rgba(27,55,85,.045)]">{VALUE_CHAIN.map((step, i, arr) => <span key={step} className="flex items-center gap-2"><span className="rounded-full bg-[#F2F7FB] px-3 py-1 text-[11px] font-bold text-[#2f7298]">{step}</span>{i < arr.length - 1 && <MoveRight size={14} className="text-[#B6C3CF]" />}</span>)}</div>
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_400px]"><div className="space-y-3">{opportunities.map(item => <button key={item.id} onClick={() => setSelectedId(item.id)} data-testid={`card-opportunity-${item.id}`} className={cn('w-full rounded-2xl border bg-white p-5 text-left shadow-[0_8px_28px_rgba(27,55,85,.045)] transition-all hover:border-[#B9CFE3]', selectedId === item.id ? 'border-[#1E5799] ring-2 ring-[#1E5799]/10' : 'border-[#E0E7EF]')}><div className="flex items-start justify-between gap-3"><div className="flex items-start gap-3"><div className={cn('grid h-10 w-10 shrink-0 place-items-center rounded-xl', item.severity === 'Alta' ? 'bg-[#FFF0EE] text-[#C94C40]' : 'bg-[#FFF4DF] text-[#956A1B]')}><Lightbulb size={19} /></div><div><h2 className="font-display text-base font-bold text-[#172033]">{item.title}</h2><div className="mt-2 flex flex-wrap items-center gap-2"><Badge color={item.severity === 'Alta' ? 'coral' : 'amber'}>{item.severity} prioridade</Badge><span className="text-[11px] text-[#8695A4]">Segmento: <b className="text-[#52657A]">{item.segment}</b></span></div></div></div><ChevronRight size={18} className={cn('mt-1 text-[#AAB8C5]', selectedId === item.id && 'text-[#1E5799]')} /></div><p className="mt-4 text-sm leading-6 text-[#687B8E]">{item.summary}</p><div className="mt-4 flex flex-wrap items-center gap-4 border-t border-[#EEF2F5] pt-3 text-[11px] text-[#8695A4]"><span className="flex items-center gap-1.5"><Users size={14} className="text-[#1E5799]" />{item.affectedUsers} usuários afetados</span><span className="flex items-center gap-1.5"><Target size={14} className="text-[#62BD4D]" />{item.confidence}% confiança</span><span className="flex items-center gap-1.5"><Activity size={14} className="text-[#2f7298]" />Impacto em {item.impact.toLowerCase()}</span><Badge color="slate">{item.status}</Badge></div></button>)}</div>
+      {selected && <Card className="h-fit overflow-hidden"><div className="border-b border-[#E5EBF1] bg-[#FAFBFC] p-5"><div className="flex items-center justify-between"><Badge color={selected.severity === 'Alta' ? 'coral' : 'amber'}>{selected.severity} prioridade</Badge><Badge color="slate">{selected.status}</Badge></div><h2 className="mt-4 font-display text-xl font-bold tracking-[-.03em] text-[#172033]">{selected.title}</h2><p className="mt-2 text-xs leading-5 text-[#718296]">{selected.summary}</p><div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-[#5A6C7E]"><span className="flex items-center gap-1.5"><Users size={13} className="text-[#1E5799]" /><b>{selected.affectedUsers}</b> usuários afetados</span><span className="flex items-center gap-1.5"><Target size={13} className="text-[#62BD4D]" /><b>{selected.confidence}%</b> confiança</span><span className="flex items-center gap-1.5"><Activity size={13} className="text-[#2f7298]" />{selected.impact}</span></div></div>
+        <div className="p-5"><div className="space-y-4">
+            <div><div className="mb-1.5 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[.16em] text-[#8493A2]"><Activity size={13} className="text-[#2f7298]" />Comportamento observado — o que foi identificado</div><p className="text-xs leading-5 text-[#52657A]">{selected.summary}</p></div>
+            <div><div className="mb-1.5 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[.16em] text-[#8493A2]"><FileText size={13} className="text-[#2f7298]" />Regra utilizada</div><p className="rounded-lg bg-[#F7F9FB] p-2.5 text-xs italic leading-5 text-[#52657A]">{selected.rule}</p></div>
+            <div><div className="mb-1.5 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[.16em] text-[#8493A2]"><Lightbulb size={13} className="text-[#2f7298]" />Evidências — dados que sustentam a hipótese</div><div className="space-y-2">{selected.evidence.map((evidence, index) => <div key={index} className="flex gap-3 rounded-lg bg-[#F7F9FB] p-3"><span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[#E4F2E0] text-[10px] font-bold text-[#347629]">{index + 1}</span><span className="text-xs leading-5 text-[#52657A]">{evidence}</span></div>)}</div></div>
+            <div><div className="mb-1.5 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[.16em] text-[#8493A2]"><MessageSquareText size={13} className="text-[#2f7298]" />Hipótese</div><p className="text-xs leading-5 text-[#52657A]">{selected.hypothesis}</p></div>
+            <div><div className="mb-1.5 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[.16em] text-[#8493A2]"><ShieldCheck size={13} className="text-[#2f7298]" />Por que merece atenção</div><div className="flex flex-wrap gap-2"><Badge color={selected.severity === 'Alta' ? 'coral' : 'amber'}>{selected.severity} prioridade</Badge><Badge color="blue">{selected.confidence}% confiança</Badge><Badge color="green">Impacto em {selected.impact}</Badge></div></div>
+            <div className="rounded-xl border border-[#CBE0F1] bg-[#F2F7FB] p-4"><div className="flex items-center gap-2 text-xs font-bold text-[#1E5799]"><Sparkles size={15} />Recomendação — próxima ação</div><p className="mt-2 text-xs leading-5 text-[#52657A]">{selected.recommendation}</p></div>
+            <div><div className="mb-1.5 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[.16em] text-[#8493A2]"><TrendingUp size={13} className="text-[#2f7298]" />Como acompanhar o resultado</div><p className="text-xs leading-5 text-[#52657A]">{selected.metric}</p></div>
+          </div>
+          <Link href="/comunicacao" data-testid="link-create-from-opportunity" className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#123F73] text-sm font-bold text-white hover:bg-[#1E5799]"><MessageSquareText size={16} />Criar comunicação para este segmento</Link>
+          <div className="mt-3 flex items-start gap-2 text-[10px] leading-4 text-[#8A99A8]"><Info size={13} className="mt-0.5 shrink-0 text-[#1E5799]" />A hipótese é uma possibilidade, não uma certeza. A decisão de comunicação permanece humana.</div>
+        </div></Card>}</div>
   </>;
 }
 
-function Communication({ allSegments, allOpportunities }: { allSegments: ComputedSegment[]; allOpportunities: ComputedOpportunity[] }) {
+function Communication({ allSegments, allOpportunities, demoTarget }: { allSegments: ComputedSegment[]; allOpportunities: ComputedOpportunity[]; demoTarget: DemoTarget | null }) {
   const [segment, setSegment] = useState<SegmentKey>('Com dificuldade');
   const [channel, setChannel] = useState('E-mail');
   const [tone, setTone] = useState('Orientativo');
@@ -290,18 +477,22 @@ function Communication({ allSegments, allOpportunities }: { allSegments: Compute
   const [version, setVersion] = useState(0);
   const [approved, setApproved] = useState(false);
   const [message, setMessage] = useState(() => generateCommunication(segment, channel, tone, objective, allOpportunities.find(o => o.id === opportunityId)?.title));
-  const selectedOpp = allOpportunities.find(o => o.id === opportunityId);
   useEffect(() => {
-    setMessage(generateCommunication(segment, channel, tone, objective, selectedOpp?.title));
-    setApproved(false);
-  }, [segment, channel, tone, objective, opportunityId, selectedOpp?.title]);
-  const regenerate = () => {
-    const nextVersion = version + 1;
-    const generated = generateCommunication(segment, channel, tone, objective, selectedOpp?.title);
-    setMessage({ subject: `${generated.subject} · versão ${nextVersion + 1}`, body: `${generated.body}\n\nMensagem alternativa com foco em ${objective.toLowerCase()} pelo canal ${channel.toLowerCase()}.` });
-    setVersion(nextVersion);
-    setApproved(false);
-  };
+    if (!demoTarget) return;
+    const nextSegment = demoTarget.segment ?? segment;
+    const nextObjective = demoTarget.objective ?? objective;
+    const nextTone = demoTarget.tone ?? tone;
+    const nextOppId = demoTarget.opportunityId ?? opportunityId;
+    if (demoTarget.segment) setSegment(demoTarget.segment);
+    if (demoTarget.objective) setObjective(demoTarget.objective);
+    if (demoTarget.tone) setTone(demoTarget.tone);
+    if (demoTarget.opportunityId) setOpportunityId(demoTarget.opportunityId);
+    setMessage(generateCommunication(nextSegment, channel, nextTone, nextObjective, allOpportunities.find(o => o.id === nextOppId)?.title));
+    setVersion(v => v + 1);
+    if (demoTarget.approve !== undefined) setApproved(demoTarget.approve);
+  }, [demoTarget]);
+  const selectedOpp = allOpportunities.find(o => o.id === opportunityId);
+  const regenerate = () => { setMessage(generateCommunication(segment, channel, tone, objective, selectedOpp?.title)); setVersion(v => v + 1); setApproved(false); };
   const copyText = () => { navigator.clipboard?.writeText(`Assunto: ${message.subject}\n\n${message.body}`); setCopied(true); window.setTimeout(() => setCopied(false), 1600); };
   return <><PageHeader title="Comunicação inteligente" description="Converta uma oportunidade em um rascunho contextual. A revisão humana é sempre a etapa final." actions={<Badge color="amber"><LockKeyhole size={12} />Motor de inteligência comportamental</Badge>} />
     <div className="grid gap-5 xl:grid-cols-[360px_1fr]"><Card className="p-5"><div className="mb-5 flex items-center gap-2"><div className="grid h-8 w-8 place-items-center rounded-lg bg-[#E8F1F8] text-[#1E5799]"><Settings2 size={16} /></div><div><h2 className="font-display text-base font-bold">Configurar mensagem</h2><p className="text-[11px] text-[#8391A0]">Defina o contexto da comunicação</p></div></div><div className="space-y-4">
@@ -315,7 +506,7 @@ function Communication({ allSegments, allOpportunities }: { allSegments: Compute
   </>;
 }
 
-function ImportData({ onImport }: { onImport: (events: AccessEvent[]) => void }) {
+function ImportData({ onImport }: { onImport: (events: AccessEvent[], origin?: 'importada' | 'simulada') => void }) {
   const [dragging, setDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(() => getStored<string | null>('pulso-import-file', null));
   const [parsed, setParsed] = useState<{ events: AccessEvent[]; errors: string[]; stats: { totalRows: number; validRows: number; users: number; dateRange: string } } | null>(null);
@@ -340,7 +531,7 @@ function ImportData({ onImport }: { onImport: (events: AccessEvent[]) => void })
   }, []);
   return <><PageHeader title="Importar dados" description="Atualize a análise com um CSV anonimizado. O processamento é local — nenhum dado sai da sua máquina." actions={<Button variant="outline" onClick={() => { const blob = new Blob([CSV_EXAMPLE], { type: 'text/csv' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = 'exemplo-pulso.csv'; link.click(); URL.revokeObjectURL(url); }} data-testid="button-download-example"><Download size={15} />Baixar CSV de exemplo</Button>} />
     {error && <div className="mb-5 flex items-center gap-2 rounded-xl border border-[#F0C5C0] bg-[#FFF3F1] p-3 text-sm text-[#B94A40]" data-testid="status-import-error"><TriangleAlert size={17} />{error}</div>}
-    <div className="grid gap-5 xl:grid-cols-[1fr_390px]"><Card className="p-6"><div onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }} className={cn('flex min-h-[260px] flex-col items-center justify-center rounded-2xl border-2 border-dashed transition-colors', dragging ? 'border-[#1E5799] bg-[#F0F6FB]' : 'border-[#C9D6E2] bg-[#FCFDFE]')}><div className="grid h-14 w-14 place-items-center rounded-2xl bg-[#E8F1F8] text-[#1E5799]"><UploadCloud size={25} /></div><h2 className="mt-5 font-display text-lg font-bold">Arraste seu CSV aqui</h2><p className="mt-2 text-center text-sm text-[#8493A2]">ou selecione um arquivo de até 10 MB para começar</p><label className="mt-5 inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg bg-[#123F73] px-4 text-sm font-bold text-white hover:bg-[#1E5799]"><UploadCloud size={15} />Selecionar arquivo<input type="file" accept=".csv,text/csv" className="hidden" onChange={e => handleFile(e.target.files?.[0])} data-testid="input-import-file" /></label></div>{parsed && <div className="mt-5 rounded-xl border border-[#DCE6EE] bg-[#F8FAFC] p-4" data-testid="status-import-parsed"><div className="flex items-center gap-3"><div className="grid h-9 w-9 place-items-center rounded-lg bg-[#E7F5E4] text-[#347629]"><FileText size={18} /></div><div className="min-w-0 flex-1"><div className="truncate text-sm font-bold">{fileName}</div><div className="text-[11px] text-[#8796A5]">{parsed.stats.validRows} eventos · {parsed.stats.users} usuários · {parsed.stats.dateRange}</div></div></div>{parsed.errors.length > 0 && <div className="mt-3 text-[11px] text-[#956A1B]">{parsed.errors.length} aviso(s) encontrado(s)</div>}<div className="mt-4 flex flex-wrap gap-2"><Button onClick={() => { onImport(parsed.events); setImported(true); }} data-testid="button-apply-import"><Check size={15} />Aplicar ao dashboard</Button><Button variant="outline" onClick={() => { const def = generateDefaultEvents(); onImport(def); setParsed(null); setImported(false); setFileName(null); clearStored('pulso-import-file'); clearStored('pulso-events'); }} data-testid="button-reset-import"><RefreshCw size={15} />Restaurar base simulada</Button></div>{imported && <div className="mt-3 flex items-center gap-2 text-sm text-[#347629]" data-testid="status-import-applied"><Check size={16} />Base processada com sucesso — dashboard atualizado</div>}</div>}</Card>
+    <div className="grid gap-5 xl:grid-cols-[1fr_390px]"><Card className="p-6"><div onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }} className={cn('flex min-h-[260px] flex-col items-center justify-center rounded-2xl border-2 border-dashed transition-colors', dragging ? 'border-[#1E5799] bg-[#F0F6FB]' : 'border-[#C9D6E2] bg-[#FCFDFE]')}><div className="grid h-14 w-14 place-items-center rounded-2xl bg-[#E8F1F8] text-[#1E5799]"><UploadCloud size={25} /></div><h2 className="mt-5 font-display text-lg font-bold">Arraste seu CSV aqui</h2><p className="mt-2 text-center text-sm text-[#8493A2]">ou selecione um arquivo de até 10 MB para começar</p><label className="mt-5 inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg bg-[#123F73] px-4 text-sm font-bold text-white hover:bg-[#1E5799]"><UploadCloud size={15} />Selecionar arquivo<input type="file" accept=".csv,text/csv" className="hidden" onChange={e => handleFile(e.target.files?.[0])} data-testid="input-import-file" /></label></div>{parsed && <div className="mt-5 rounded-xl border border-[#DCE6EE] bg-[#F8FAFC] p-4" data-testid="status-import-parsed"><div className="flex items-center gap-3"><div className="grid h-9 w-9 place-items-center rounded-lg bg-[#E7F5E4] text-[#347629]"><FileText size={18} /></div><div className="min-w-0 flex-1"><div className="truncate text-sm font-bold">{fileName}</div><div className="text-[11px] text-[#8796A5]">{parsed.stats.validRows} eventos · {parsed.stats.users} usuários · {parsed.stats.dateRange}</div></div></div>{parsed.errors.length > 0 && <div className="mt-3 text-[11px] text-[#956A1B]">{parsed.errors.length} aviso(s) encontrado(s)</div>}<div className="mt-4 flex flex-wrap gap-2"><Button onClick={() => { onImport(parsed.events, 'importada'); setImported(true); }} data-testid="button-apply-import"><Check size={15} />Aplicar ao dashboard</Button><Button variant="outline" onClick={() => { const def = generateDefaultEvents(); onImport(def, 'simulada'); setParsed(null); setImported(false); setFileName(null); clearStored('pulso-import-file'); clearStored('pulso-events'); }} data-testid="button-reset-import"><RefreshCw size={15} />Restaurar base simulada</Button></div>{imported && <div className="mt-3 flex items-center gap-2 text-sm text-[#347629]" data-testid="status-import-applied"><Check size={16} />Base processada com sucesso — dashboard atualizado</div>}</div>}</Card>
       <Card className="p-5"><div className="mb-5 flex items-center justify-between"><div><h2 className="font-display text-base font-bold">Contrato de dados</h2><p className="mt-1 text-xs text-[#8391A0]">Colunas esperadas pelo PULSO</p></div><Badge color="green">10 colunas</Badge></div><div className="space-y-3">{['user_id', 'session_id', 'timestamp', 'page', 'event_type', 'user_type', 'duration_seconds', 'previous_page', 'next_page', 'completed_action'].map((column, index) => <div key={column} className="flex items-center justify-between rounded-lg border border-[#E6ECF2] px-3 py-2.5"><div className="flex items-center gap-2"><span className="font-mono text-xs font-bold text-[#1E5799]">{column}</span>{index < 4 && <span className="text-[9px] font-bold uppercase text-[#C94C40]">obrigatória</span>}</div><span className="text-[10px] text-[#8796A5]">{['texto', 'texto', 'data ISO', 'texto', 'texto', 'texto', 'segundos', 'texto', 'texto', 'boolean'][index]}</span></div>)}</div></Card></div></>;
 }
 
@@ -352,35 +543,25 @@ function LegacyMethodology() {
 
 function Methodology() {
   const [modal, setModal] = useState<MethodologyDetail | null>(null);
-  const steps = [
-    ['Anonimizar', 'Remove identificadores diretos e preserva apenas o necessário para análise.', 'Eventos recebem identificadores como USR-001, sem nome ou contato.'],
-    ['Organizar', 'Padroniza eventos, horários, páginas e caminhos de navegação.', 'O CSV é convertido em eventos estruturados antes dos indicadores.'],
-    ['Identificar padrões', 'Encontra repetições, quedas, retornos e mudanças de comportamento.', 'Buscas repetidas antes da documentação podem formar um sinal.'],
-    ['Formar segmentos', 'Agrupa perfis por sinais e contexto, não por identidade.', 'Usuários com navegação circular podem formar o segmento Explorador.'],
+  const items = [
+    ['Anonimizar', 'Remove identificadores diretos e preserva apenas o necessário.', 'O CSV mantém USR-001 e não nomes ou contatos.'],
+    ['Organizar', 'Padroniza eventos, horários, páginas e caminhos.', 'Os registros são estruturados antes dos indicadores.'],
+    ['Identificar padrões', 'Encontra repetições, quedas, retornos e mudanças.', 'Buscas repetidas antes da documentação formam um sinal.'],
+    ['Formar segmentos', 'Agrupa perfis por comportamento e contexto.', 'Navegação circular pode formar o segmento Explorador.'],
     ['Priorizar sinais', 'Combina impacto, confiança e possibilidade de ação.', 'Um abandono recorrente pode receber prioridade Alta.'],
-    ['Recomendar ações', 'Sugere uma hipótese que conecta o sinal a uma resposta possível.', 'O sistema recomenda um atalho para a documentação.'],
-    ['Revisar com pessoas', 'Valida contexto, linguagem, privacidade e impacto antes de qualquer uso.', 'Uma pessoa revisa e aprova o rascunho; o PULSO não envia mensagens.'],
+    ['Recomendar ações', 'Conecta um sinal a uma hipótese de resposta.', 'O sistema sugere um atalho para a documentação.'],
+    ['Revisar com pessoas', 'Valida contexto, linguagem, privacidade e impacto.', 'Uma pessoa aprova o rascunho; o PULSO não envia mensagens.'],
   ];
-  const principles = [
-    ['Transparência', 'O PULSO mostra quais sinais e regras foram utilizados para produzir cada recomendação.', 'A oportunidade exibe sua regra e as evidências observadas.'],
-    ['Explicabilidade', 'Cada oportunidade apresenta evidências que permitem compreender por que foi identificada.', 'A equipe pode conferir sessões, páginas e eventos relacionados.'],
-    ['Privacidade', 'Os usuários são representados por identificadores anonimizados, como USR-001.', 'O painel apresenta USR-024 em vez de dados pessoais.'],
-    ['Minimização de dados', 'O PULSO utiliza somente os dados necessários para os indicadores previstos.', 'O processamento usa páginas, timestamps e eventos do CSV.'],
-    ['Revisão humana', 'O sistema gera hipóteses e rascunhos, mas a decisão final permanece com uma pessoa responsável.', 'A comunicação precisa ser revisada antes de qualquer utilização.'],
-    ['Inclusão e diversidade', 'A solução considera diferentes perfis e evita abordagens que gerem exclusão ou tratamento inadequado.', 'Segmentos comportamentais não dependem de identidade pessoal.'],
-    ['Inovação responsável', 'Tecnologia e inteligência artificial devem estar associadas à transparência, privacidade e responsabilidade humana.', 'Uma recomendação é apresentada como hipótese, não como verdade automática.'],
-    ['Foco nas necessidades dos usuários', 'As recomendações respondem às necessidades identificadas nas jornadas.', 'Um atalho documental atende a uma dificuldade observada na navegação.'],
-  ];
-  const openModal = (item: string[]) => setModal({ title: item[0], description: item[1], data: 'Eventos anonimizados do CSV ativo, como identificador, sessão, timestamp, página e tipo de evento.', result: `Uma definição clara de ${item[0].toLowerCase()} para orientar os indicadores, segmentos e oportunidades.`, example: item[2], privacy: 'O processamento ocorre localmente no navegador, com minimização de dados e identificadores anonimizados. Nenhuma mensagem é enviada automaticamente.' });
-  return <><PageHeader title="Metodologia transparente" description="O PULSO transforma dados locais em sinais explicáveis e mantém a decisão final com pessoas." /><div className="space-y-5"><Card className="p-6"><div className="mb-6 flex items-center gap-3"><div className="grid h-10 w-10 place-items-center rounded-xl bg-[#E8F1F8] text-[#1E5799]"><RouteIcon size={20} /></div><div><h2 className="font-display text-lg font-bold">Processo em 7 etapas</h2><p className="text-xs text-[#8391A0]">Clique em uma etapa para ver dados, resultado e cuidados</p></div></div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">{steps.map((step, index) => <button key={step[0]} onClick={() => openModal(step)} className="flex min-h-[126px] items-start gap-3 rounded-xl border border-[#E7EDF2] p-4 text-left transition-colors hover:border-[#9CBBD4] hover:bg-[#F7FAFC]" data-testid={`method-step-${index + 1}`}><div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#123F73] font-display text-sm font-bold text-white">{index + 1}</div><div><div className="text-sm font-bold text-[#34485D]">{step[0]}</div><div className="mt-1 text-[11px] leading-5 text-[#8796A5]">{step[1]}</div></div><ChevronRight size={16} className="ml-auto shrink-0 text-[#B6C3CF]" /></button>)}</div></Card><div className="grid gap-5 md:grid-cols-3"><Card className="p-6"><h2 className="font-display text-xl font-bold">Missão</h2><p className="mt-3 text-sm leading-7 text-[#52657A]">Transformar dados de navegação em informações claras e acionáveis, ajudando a Petronect a compreender as jornadas de clientes e fornecedores e a construir comunicações mais relevantes.</p></Card><Card className="p-6"><h2 className="font-display text-xl font-bold">Visão</h2><p className="mt-3 text-sm leading-7 text-[#52657A]">Ser uma solução de referência em inteligência comportamental explicável para o ecossistema Petronect, conectando dados, contexto e decisões mais humanas.</p></Card><Card className="p-6"><h2 className="font-display text-xl font-bold">Valores</h2><p className="mt-3 text-sm leading-7 text-[#52657A]">Transparência, explicabilidade, privacidade, minimização de dados, revisão humana, inclusão e diversidade, inovação responsável e foco nas necessidades dos usuários.</p></Card></div><Card className="p-6"><div className="mb-5 flex items-center gap-2"><LockKeyhole size={18} className="text-[#1E5799]" /><h2 className="font-display text-lg font-bold">Princípios e valores interativos</h2></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{principles.map(item => <button key={item[0]} onClick={() => openModal(item)} className="rounded-xl border border-[#E7EDF2] p-4 text-left hover:border-[#9CBBD4] hover:bg-[#F7FAFC]" data-testid={`principle-${item[0]}`}><div className="text-sm font-bold text-[#34485D]">{item[0]}</div><div className="mt-1 text-[11px] leading-5 text-[#8796A5]">{item[1]}</div></button>)}</div></Card><Card className="bg-[#123F73] p-6 text-white"><h2 className="font-display text-lg font-bold">Processamento local e revisão humana</h2><p className="mt-2 text-sm leading-6 text-white/70">O processamento ocorre no navegador, sem envio de dados para servidores externos. O PULSO gera hipóteses, recomendações e rascunhos, mas não envia mensagens automaticamente.</p></Card></div>{modal && <InfoModal detail={modal} onClose={() => setModal(null)} />}</>;
+  const values = ['Transparência', 'Explicabilidade', 'Privacidade', 'Minimização de dados', 'Revisão humana', 'Inclusão e diversidade', 'Inovação responsável', 'Foco nas necessidades dos usuários'];
+  const openModal = (item: string[]) => setModal({ title: item[0], description: item[1], data: 'Eventos anonimizados do CSV ativo, como identificador, sessão, timestamp, página e tipo de evento.', result: `Uma definição clara de ${item[0].toLowerCase()} para orientar indicadores e oportunidades.`, example: item[2], privacy: 'Processamento local no navegador, com minimização de dados e identificadores anonimizados.' });
+  return <><PageHeader title="Metodologia transparente" description="O PULSO transforma dados locais em sinais explicáveis e mantém a decisão final com pessoas." /><div className="space-y-5"><Card className="p-6"><div className="mb-6 flex items-center gap-3"><div className="grid h-10 w-10 place-items-center rounded-xl bg-[#E8F1F8] text-[#1E5799]"><RouteIcon size={20} /></div><div><h2 className="font-display text-lg font-bold">Processo em 7 etapas</h2><p className="text-xs text-[#8391A0]">Clique em uma etapa para ver dados, resultado e cuidados</p></div></div><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">{items.map((item, index) => <button key={item[0]} onClick={() => openModal(item)} className="flex min-h-[126px] items-start gap-3 rounded-xl border border-[#E7EDF2] p-4 text-left hover:border-[#9CBBD4] hover:bg-[#F7FAFC]" data-testid={`method-step-${index + 1}`}><div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-[#123F73] font-display text-sm font-bold text-white">{index + 1}</div><div><div className="text-sm font-bold text-[#34485D]">{item[0]}</div><div className="mt-1 text-[11px] leading-5 text-[#8796A5]">{item[1]}</div></div><ChevronRight size={16} className="ml-auto shrink-0 text-[#B6C3CF]" /></button>)}</div></Card><div className="grid gap-5 md:grid-cols-3"><Card className="p-6"><h2 className="font-display text-xl font-bold">Missão</h2><p className="mt-3 text-sm leading-7 text-[#52657A]">Transformar dados de navegação em informações claras e acionáveis, ajudando a Petronect a compreender jornadas e construir comunicações mais relevantes.</p></Card><Card className="p-6"><h2 className="font-display text-xl font-bold">Visão</h2><p className="mt-3 text-sm leading-7 text-[#52657A]">Ser referência em inteligência comportamental explicável para o ecossistema Petronect.</p></Card><Card className="p-6"><h2 className="font-display text-xl font-bold">Valores</h2><p className="mt-3 text-sm leading-7 text-[#52657A]">{values.join('; ')}.</p></Card></div><Card className="p-6"><div className="mb-5 flex items-center gap-2"><LockKeyhole size={18} className="text-[#1E5799]" /><h2 className="font-display text-lg font-bold">Princípios e valores interativos</h2></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{values.map(value => <button key={value} onClick={() => openModal([value, `O PULSO aplica ${value.toLowerCase()} para tornar as recomendações mais responsáveis e úteis.`, `A equipe pode verificar como ${value.toLowerCase()} aparece em uma oportunidade antes de aprová-la.`])} className="rounded-xl border border-[#E7EDF2] p-4 text-left hover:border-[#9CBBD4] hover:bg-[#F7FAFC]" data-testid={`principle-${value}`}><div className="text-sm font-bold text-[#34485D]">{value}</div><div className="mt-1 text-[11px] leading-5 text-[#8796A5]">Clique para ver um exemplo aplicado.</div></button>)}</div></Card><Card className="bg-[#123F73] p-6 text-white"><h2 className="font-display text-lg font-bold">Processamento local e revisão humana</h2><p className="mt-2 text-sm leading-6 text-white/70">O PULSO gera hipóteses, recomendações e rascunhos, mas não envia mensagens automaticamente.</p></Card></div>{modal && <InfoModal detail={modal} onClose={() => setModal(null)} />}</>;
 }
 
 function About() {
-  return <><PageHeader eyebrow="HACKATHON CONEXÃO ANCESTRAL 2026" title="PULSO Petronect — Do clique à ação, com contexto" description="O PULSO transforma registros anonimizados de navegação no Portal Petronect em indicadores, segmentos comportamentais, oportunidades explicáveis e rascunhos de comunicação para revisão humana." /><div className="grid gap-5 xl:grid-cols-[1.2fr_1fr]"><Card className="overflow-hidden"><div className="bg-[#123F73] p-7 text-white md:p-9"><div className="mb-8 flex items-center gap-3"><Logo /><span className="hidden text-xs font-semibold text-white/60 sm:block">Protótipo demonstrativo</span></div><h2 className="max-w-xl font-display text-3xl font-bold leading-tight tracking-[-.04em] md:text-4xl">Do clique à ação,<br /><span className="text-[#9BD68D]">com contexto.</span></h2><p className="mt-5 max-w-lg text-sm leading-7 text-white/65">Processamento local no navegador, com dados simulados e anonimizados, sem envio automático de mensagens.</p></div><div className="grid gap-4 p-6 sm:grid-cols-3"><div><div className="text-[10px] font-bold uppercase tracking-[.14em] text-[#8A99A8]">Realização</div><div className="mt-2 text-sm font-bold text-[#34485D]">Petronect</div></div><div><div className="text-[10px] font-bold uppercase tracking-[.14em] text-[#8A99A8]">Execução</div><div className="mt-2 text-sm font-bold text-[#34485D]">KODIE Academy</div></div><div><div className="text-[10px] font-bold uppercase tracking-[.14em] text-[#8A99A8]">Evento</div><div className="mt-2 text-sm font-bold text-[#34485D]">Hackathon Conexão Ancestral 2026</div></div></div></Card><div className="space-y-5"><Card className="p-6"><div className="mb-5 flex items-center justify-between"><div><div className="text-[10px] font-bold uppercase tracking-[.16em] text-[#1E5799]">Equipe 10</div><h2 className="mt-1 font-display text-xl font-bold">Pessoas por trás do PULSO</h2></div><UsersRound size={21} className="text-[#1E5799]" /></div><div className="space-y-2">{TEAM_MEMBERS.map((name, index) => <div key={name} className="flex items-center gap-3 rounded-xl border border-[#E6ECF2] p-3"><div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#E6EEF7] text-xs font-bold text-[#1E5799]">{TEAM_INITIALS[index]}</div><div className="min-w-0"><div className="text-sm font-bold text-[#34485D]">{name}</div></div></div>)}</div></Card><Card className="p-6"><h3 className="font-display text-base font-bold">Informações do protótipo</h3><div className="mt-3 space-y-2 text-xs leading-5 text-[#617286]"><p><b>Natureza:</b> Protótipo demonstrativo</p><p><b>Dados:</b> simulados e anonimizados</p><p><b>Processamento:</b> local no navegador</p><p><b>Decisão final:</b> sempre humana</p><p>O PULSO gera hipóteses, recomendações e rascunhos; não envia mensagens automaticamente.</p></div></Card></div></div></>;
+  return <><PageHeader eyebrow="HACKATHON CONEXÃO ANCESTRAL 2026" title="Sobre o projeto" description="Uma demonstração de como transformar rastros de navegação em decisões de negócio mais humanas e explicáveis." /><div className="grid gap-5 xl:grid-cols-[1.2fr_1fr]"><Card className="overflow-hidden"><div className="bg-[#123F73] p-7 text-white md:p-9"><div className="mb-8 flex items-center gap-3"><Logo /><div className="hidden h-6 w-px bg-white/20 sm:block" /><span className="hidden text-xs font-semibold text-white/60 sm:block">Hackathon Conexão Ancestral 2026</span></div><h2 className="max-w-xl font-display text-3xl font-bold leading-tight tracking-[-.04em] md:text-4xl">Do clique à ação,<br /><span className="text-[#9BD68D]">com contexto.</span></h2><p className="mt-5 max-w-lg text-sm leading-7 text-white/65">O PULSO transforma registros de navegação anonimizados em indicadores, segmentos, alertas explicáveis, oportunidades e recomendações para o ecossistema Petronect.</p></div><div className="grid gap-4 p-6 sm:grid-cols-3"><div><div className="text-[10px] font-bold uppercase tracking-[.14em] text-[#8A99A8]">Realização</div><div className="mt-2 text-sm font-bold text-[#34485D]">Petronect</div></div><div><div className="text-[10px] font-bold uppercase tracking-[.14em] text-[#8A99A8]">Execução</div><div className="mt-2 text-sm font-bold text-[#34485D]">KODIE Academy</div></div><div><div className="text-[10px] font-bold uppercase tracking-[.14em] text-[#8A99A8]">Natureza</div><div className="mt-2 text-sm font-bold text-[#34485D]">Demonstrativa</div></div></div></Card><div className="space-y-5"><Card className="p-6"><div className="mb-5 flex items-center justify-between"><div><div className="text-[10px] font-bold uppercase tracking-[.16em] text-[#1E5799]">Equipe 10</div><h2 className="mt-1 font-display text-xl font-bold">Pessoas por trás do pulso</h2></div><UsersRound size={21} className="text-[#1E5799]" /></div><div className="space-y-2">{TEAM_MEMBERS.map((name, index) => <div key={name} className="flex items-center gap-3 rounded-xl border border-[#E6ECF2] p-3"><div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#E6EEF7] text-xs font-bold text-[#1E5799]">{TEAM_INITIALS[index]}</div><div className="min-w-0"><div className="truncate text-sm font-bold text-[#34485D]">{name}</div></div></div>)}</div></Card><Card className="bg-[#F5F8FB] p-6"><h3 className="font-display text-base font-bold text-[#172033]">Sobre a demonstração</h3><div className="mt-3 space-y-2 text-xs leading-5 text-[#617286]"><p>Esta é uma demonstração do que o PULSO pode oferecer ao ecossistema Petronect.</p><p>Os dados exibidos são simulados para fins de apresentação no Hackathon Conexão Ancestral 2026.</p><p>O processamento ocorre inteiramente localmente. Não há envio de dados para servidores externos.</p><p>As recomendações são hipóteses baseadas em padrões comportamentais. A decisão final permanece sempre humana.</p></div></Card></div></div></>
 }
 
 function Login() {
-  const [, setLocation] = useLocation();
   const [email, setEmail] = useState('analista@petronect.com.br');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -406,7 +587,7 @@ function NotFound() {
 }
 
 function Router() {
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
   const auth = getStored('pulso-auth', false);
   if (location === '/login') return <Login />;
   if (!auth) return <Login />;
@@ -418,26 +599,69 @@ function Router() {
 
   const storedEvents = getStored<AccessEvent[] | null>('pulso-events', null);
   const [events, setEvents] = useState<AccessEvent[]>(() => storedEvents || generateDefaultEvents());
-  const [filters, setFilters] = useState<Filters>(() => getStored('pulso-filters', { period: '30 dias', userType: 'Todos', page: 'Todas', segment: 'Todos', priority: 'Todas', oppStatus: 'Todas' }));
+  const [filters, setFilters] = useState<Filters>(() => getStored('pulso-filters', DEFAULT_FILTERS));
   const [refreshKey, setRefreshKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [demoOpen, setDemoOpen] = useState(false);
+  const [demoStep, setDemoStep] = useState(0);
+  const [demoTarget, setDemoTarget] = useState<DemoTarget | null>(null);
+  const [dataSource, setDataSource] = useState<BaseSource>(() => {
+    const file = getStored<string | null>('pulso-import-file', null);
+    return { mode: file ? 'importada' : 'simulada', file, processedAt: getStored<string | null>('pulso-base-processed-at', null) || new Date().toISOString() };
+  });
 
   useEffect(() => { setStored('pulso-filters', filters); }, [filters]);
   const onRefresh = useCallback(() => { setRefreshing(true); setRefreshKey(k => k + 1); window.setTimeout(() => setRefreshing(false), 900); }, []);
-  const onImport = useCallback((newEvents: AccessEvent[]) => { setEvents(newEvents); setStored('pulso-events', newEvents); }, []);
+  const onImport = useCallback((newEvents: AccessEvent[], origin: 'importada' | 'simulada' = 'importada') => {
+    setEvents(newEvents);
+    setStored('pulso-events', newEvents);
+    const processedAt = new Date().toISOString();
+    setStored('pulso-base-processed-at', processedAt);
+    if (origin === 'importada') {
+      const file = getStored<string | null>('pulso-import-file', null) || 'CSV anônimo';
+      setDataSource({ mode: 'importada', file, processedAt });
+    } else {
+      clearStored('pulso-import-file');
+      setDataSource({ mode: 'simulada', file: null, processedAt });
+    }
+  }, []);
+  const onRestoreDemo = useCallback(() => {
+    clearStored('pulso-events');
+    clearStored('pulso-import-file');
+    clearStored('pulso-base-processed-at');
+    setEvents(generateDefaultEvents());
+    setDataSource({ mode: 'simulada', file: null, processedAt: new Date().toISOString() });
+  }, []);
+  const onDemoStart = useCallback(() => { setDemoStep(0); setDemoTarget(DEMO_STEPS[0]?.target ?? null); setDemoOpen(true); }, []);
+  const onDemoEnd = useCallback(() => { setDemoOpen(false); setDemoTarget(null); }, []);
+  const onDemoClose = onDemoEnd;
+  const onDemoRestart = useCallback(() => setDemoStep(0), []);
+  const onDemoPrev = useCallback(() => setDemoStep(s => Math.max(s - 1, 0)), []);
+  const onDemoNext = useCallback(() => {
+    setDemoStep(prev => {
+      const next = Math.min(prev + 1, DEMO_STEPS.length - 1);
+      const target = DEMO_STEPS[next]?.navigate;
+      if (target) navigate(target);
+      const t = DEMO_STEPS[next]?.target;
+      if (t) setDemoTarget(t);
+      return next;
+    });
+  }, [navigate]);
   const computed = useMemo(() => computeAll(events, filters), [events, filters, refreshKey]);
+  const baseInfo = useMemo(() => computeBaseInfo(events), [events]);
+  const demoMeta = DEMO_STEPS[Math.min(demoStep, DEMO_STEPS.length - 1)];
 
-  return <Shell filters={filters} setFilters={setFilters} onRefresh={onRefresh} refreshing={refreshing} metricsChange={computed.allOpportunities}>
+  return <Shell filters={filters} onRefresh={onRefresh} refreshing={refreshing} metricsChange={computed.allOpportunities} dataSource={dataSource} baseInfo={baseInfo} demoOpen={demoOpen} demoStep={demoStep} demoMeta={demoMeta} onDemoStart={onDemoStart} onDemoNext={onDemoNext} onDemoPrev={onDemoPrev} onDemoRestart={onDemoRestart} onDemoEnd={onDemoEnd} onDemoClose={onDemoClose} onRestoreDemo={onRestoreDemo}>
     <Switch>
-      <Route path="/" component={() => <Overview filters={filters} setFilters={setFilters} computed={computed} />} />
-      <Route path="/jornada" component={() => <Journey computed={computed} />} />
-      <Route path="/segmentos" component={() => <Segments computed={computed} filters={filters} />} />
-      <Route path="/oportunidades" component={() => <Opportunities computed={computed} filters={filters} setFilters={setFilters} />} />
-      <Route path="/comunicacao" component={() => <Communication allSegments={computed.allSegments} allOpportunities={computed.allOpportunities} />} />
-      <Route path="/importar" component={() => <ImportData onImport={onImport} />} />
-      <Route path="/metodologia" component={Methodology} />
-      <Route path="/sobre" component={About} />
-      <Route component={NotFound} />
+      <Route path="/"><Overview filters={filters} setFilters={setFilters} computed={computed} /></Route>
+      <Route path="/jornada"><Journey /></Route>
+      <Route path="/segmentos"><Segments computed={computed} /></Route>
+      <Route path="/oportunidades"><Opportunities computed={computed} filters={filters} setFilters={setFilters} demoTarget={demoTarget} /></Route>
+      <Route path="/comunicacao"><Communication allSegments={computed.allSegments} allOpportunities={computed.allOpportunities} demoTarget={demoTarget} /></Route>
+      <Route path="/importar"><ImportData onImport={onImport} /></Route>
+      <Route path="/metodologia"><Methodology /></Route>
+      <Route path="/sobre"><About /></Route>
+      <Route><NotFound /></Route>
     </Switch>
     <button onClick={handleLogout} data-testid="button-logout" className="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-lg bg-[#FF6654] px-4 py-2.5 text-xs font-bold text-white shadow-lg transition-colors hover:bg-[#e95545]" aria-label="Sair do sistema"><LogOut size={15} />Sair</button>
   </Shell>;

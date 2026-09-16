@@ -1,65 +1,128 @@
 # PULSO Petronect
 
+> Do clique à ação, com contexto.
+
+**PULSO** (Painel de Sinais e Oportunidades) transforma rastros de navegação anonimizados do ecossistema Petronect em indicadores, segmentos comportamentais, alertas explicáveis, oportunidades e recomendações gerenciais.
+
+Projeto demonstrativo (MVP) desenvolvido pela **Equipe 10** no **Hackathon Conexão Ancestral 2026** — realização **Petronect**, execução **KODIE Academy**.
+
+🔗 Produção: <https://pulso-petronect-equipe10.vercel.app/>
+
+---
+
 ## Problema
 
-O Portal Petronect registra jornadas de navegação que podem conter sinais úteis, mas difíceis de transformar em leitura acionável sem contexto, explicabilidade e revisão humana.
+A Petronect tem um volume crescente de eventos de navegação, mas:
 
-## Solução e objetivo
+- Os dados ficam dispersos e sem leitura estratégica em tempo real;
+- Não existe uma visão unificada do comportamento dos usuários;
+- Insights ficam limitados a exportações e análises manuais de consultas;
+- A comunicação com o usuário é reativa e baseada em intuição, sem evidências.
 
-O PULSO transforma registros anonimizados de navegação no Portal Petronect em indicadores, segmentos comportamentais, oportunidades explicáveis e rascunhos de comunicação para revisão humana. O protótipo ajuda a compreender jornadas de clientes e fornecedores e a priorizar possíveis ações.
+## Solução
 
-## Funcionalidades
+Um painel que converte registros de acesso anonimizados em uma linha de raciocínio completa:
 
-- Visão executiva com indicadores, tendências, ranking de páginas e segmentos.
-- Filtros por período, tipo de usuário, página, segmento, prioridade e status.
-- Importação de CSV, validação básica e restauração da base simulada.
-- Jornada calculada a partir da base ativa, com sessões recentes e linha do tempo.
-- Segmentos comportamentais e oportunidades com evidências e regras.
-- Comunicação contextual editável, geração de versões, cópia e aprovação de simulação.
-- Metodologia com etapas e princípios interativos.
-- Página institucional do projeto, login demonstrativo e navegação responsiva.
+**Comportamento observado → evidência → hipótese → prioridade → recomendação → comunicação.**
 
-## Arquitetura
+- **Visão geral executiva** — indicadores, tendência de acessos, horários de pico, páginas mais acessadas e mudanças de métricas com filtros por período (30/14/7 dias) e por tipo de usuário.
+- **Jornada dos usuários** — fluxo de navegação, taxas de continuidade e principal ponto de queda.
+- **Segmentos comportamentais** — 7 perfis (Novo, Explorador, Interessado, Recorrente, Com dificuldade, Em risco de abandono, Reengajado) com contagem de usuários e tendência.
+- **Central de oportunidades** — sinais explicáveis com regra utilizada, evidências, hipótese, prioridade, confiança, impacto e recomendação de próxima ação.
+- **Comunicação inteligente** — geração assistida de mensagens por segmento, objetivo, canal e tom, com versões, edição, cópia e fluxo de aprovação.
+- **Importação de dados (CSV)** — upload anônimo, validação de colunas obrigatórias e aplicação ao dashboard, com opção de restaurar a base simulada.
+- **Metodologia transparente** — regras, premissas e limitações documentadas.
+- **Guia demonstrativo** — tour passo a passo dentro do produto e botão de "Restaurar demonstração".
 
-A aplicação é um frontend React + TypeScript servido pelo Vite. Não há API nem banco de dados neste protótipo. O processamento ocorre localmente no navegador: os eventos ficam em estado React e, quando aplicável, no `localStorage`. A base simulada permanece disponível como fallback.
+## Acesso demonstrativo
 
-## Tecnologias
+| Campo    | Valor                         |
+| -------- | ----------------------------- |
+| E-mail   | `analista@petronect.com.br`   |
+| Senha    | `123456`                      |
 
-React, TypeScript, Vite, Wouter, Recharts, Tailwind CSS, Vitest e Testing Library.
+> Credenciais fictícias para fins de demonstração. Não há contas nem servidor de autenticação real.
 
-## Instalação e execução
+## Como funciona
+
+- **Base simulada**: eventos gerados deterministicamente no navegador (sem rede) para explorar todas as funcionalidades.
+- **Importação CSV**: o arquivo deve conter as colunas esperadas (`event`, `usuario`, `pagina`, `data` e demais). Erros de colunas obrigatórias são reportados na tela. Os dados são processados localmente e podem ser revertidos a qualquer momento.
+- **Persistência**: autenticação, filtros, eventos importados e aprovações de comunicação são guardados em `localStorage` (chaves `pulso-auth`, `pulso-filters`, `pulso-events`, etc.).
+
+## Privacidade e responsabilidade
+
+- Nenhum dado pessoal identificável é exibido — os eventos usam usuários mascarados (`usuário_01`, ...).
+- O processamento é **local** (no navegador) e a base é **anônima e demonstrativa**.
+- O PULSO **propõe** hipóteses e recomendações — decisões finais ficam sempre nas mãos da equipe de negócio.
+
+## Arquitetura e tecnologia
+
+Monorepo `pnpm` (workspace) com aplicação **React 19 + TypeScript + Vite 7**, roteamento com **wouter**, estilização **Tailwind CSS**, gráficos **Recharts**, UI com Radix/lucide e testes E2E com **Playwright**.
+
+```
+PULSO-Petronect/
+├── artifacts/
+│   ├── pulso-petronect/        # Aplicação principal (MVP)
+│   │   ├── src/App.tsx          # UI e fluxos (painel completo)
+│   │   ├── src/data/pulso-data.ts  # Motor de dados (simulação, métricas, segmentos, comunicação)
+│   │   ├── e2e/pulso.spec.ts    # 15 testes de ponta a ponta
+│   │   ├── public/              # logo e favicon
+│   │   └── vercel.json          # deploy SPA (Vercel)
+│   ├── mockup-sandbox/          # Experimentos de layout
+│   └── api-server/              # Referência opcional de API
+└── scripts/                     # Utilidades do workspace
+```
+
+## Como rodar
+
+Pré-requisito: **Node.js ≥ 22** e **pnpm** (`corepack enable`).
 
 ```bash
+# instalar dependências
 pnpm install
+
+# validar tipos
+pnpm run typecheck
+
+# desenvolvimento
 pnpm --filter @workspace/pulso-petronect dev
+
+# produção (preview local)
+pnpm --filter @workspace/pulso-petronect build
+pnpm --filter @workspace/pulso-petronect serve
 ```
 
-Para validação de produção:
+### Testes E2E (Playwright, 15 cenários)
+
+Usa o Chrome instalado e um servidor de preview (porta 4173) gerenciado pelo próprio Playwright.
 
 ```bash
-pnpm --filter @workspace/pulso-petronect typecheck
-pnpm --filter @workspace/pulso-petronect test -- --run
-pnpm --filter @workspace/pulso-petronect build
+pnpm --filter @workspace/pulso-petronect test:e2e
 ```
 
-## Credenciais demonstrativas
+Cobertura: login (sucesso, erro, persistência), logout, navegação entre as 8 rotas, filtros de período e tipo de usuário, importação CSV (válida, inválida e aplicação ao dashboard), regeneração/aprovação/cópia de comunicação e acesso direto a rotas sem 404.
 
-- Usuário: `analista@petronect.com.br`
-- Senha: `123456`
+### Deploy
 
-A autenticação é demonstrativa e é mantida no navegador para permitir atualização da página durante a sessão.
+```bash
+vercel --prod   # ou via integração do repositório GitHub
+```
 
-## CSV esperado
+- Build: `pnpm build` · Output: `dist/public` · Rewrites SPA incluídos em `vercel.json`.
 
-As colunas obrigatórias são `user_id`, `timestamp`, `page` e `event_type`. A estrutura completa aceita também `session_id`, `user_type`, `duration_seconds`, `previous_page`, `next_page` e `completed_action`. O botão de importação disponibiliza um arquivo de exemplo.
+## Limitações do MVP
 
-## Base simulada
+- Base **simulada e anônima** — não consome dados reais nem uma API de produção.
+- Autenticação **demonstrativa** — a senha é fixa e armazenada localmente.
+- Segmentação e recomendações são **heurísticas explicáveis**, não modelos de ML.
+- **Supervisão humana obrigatória** antes de qualquer comunicação com usuários reais.
 
-A base simulada é gerada deterministically no navegador e cobre acessos, sessões, páginas, tipos de usuário, conclusões e sinais usados pelos indicadores. Em Importar dados, “Restaurar base simulada” remove o CSV ativo e retorna a essa base.
+## Próximos passos
 
-## Privacidade e revisão humana
-
-Os dados demonstrativos são simulados e anonimizados, usando identificadores como `USR-001`. O PULSO aplica minimização de dados e não envia eventos para servidores externos. Ele gera hipóteses, recomendações e rascunhos, mas não envia mensagens automaticamente; a decisão e aprovação final permanecem com uma pessoa responsável.
+- API real de eventos com ingestão em streaming e anonimização no servidor.
+- Autenticação gerencial (SSO) e painel de equipe.
+- Modelos preditivos com explicações auditáveis.
+- Campanhas com aprovação em fluxo e medição de resultado no próprio produto.
 
 ## Equipe 10
 
@@ -68,15 +131,3 @@ Os dados demonstrativos são simulados e anonimizados, usando identificadores co
 - Jasmine de Sá Araujo
 - Juliana Freire de Oliveira
 - Stefany Rodrigues da Silva
-
-## Informações do projeto
-
-- Realização: Petronect
-- Execução: KODIE Academy
-- Evento: Hackathon Conexão Ancestral 2026
-- Natureza: Protótipo demonstrativo
-- Processamento: local no navegador
-
-## Aplicação
-
-A aplicação publicada é configurada pelo projeto Vercel em `artifacts/pulso-petronect/vercel.json`. O endereço público deve ser informado pelo ambiente de deploy responsável pelo projeto.

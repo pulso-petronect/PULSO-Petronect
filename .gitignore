@@ -47,3 +47,7 @@ Thumbs.db
 # Local caches
 .cache/
 .local/
+
+# Playwright
+test-results/
+playwright-report/
